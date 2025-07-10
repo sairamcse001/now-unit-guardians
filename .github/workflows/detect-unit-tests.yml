@@ -1,4 +1,4 @@
-name: Detect Unit Test PR
+name: Detect Unit Test PR and Print .spec.js Files as JSON
 
 on:
   pull_request:
@@ -8,25 +8,45 @@ jobs:
   check-spec-files:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
+
     steps:
-      - name: Checkout PR code
+      - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Needed for git diff across branches
+          fetch-depth: 0  # Needed for full git history and diff
 
-      - name: Detect .spec.js files using git diff
+      - name: Detect and Print .spec.js files
         run: |
-          echo "🔍 Checking for .spec.js files in this PR..."
+          echo "🔍 Checking for .spec.js files in PR..."
 
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          echo "🔁 Fetching base branch: $BASE_REF"
-          git fetch origin "$BASE_REF"
+          BASE="${{ github.event.pull_request.base.ref }}"
+          git fetch origin "$BASE"
 
-          CHANGED_FILES=$(git diff --name-only origin/"$BASE_REF"...HEAD)
-          echo "$CHANGED_FILES"
+          # Get the list of changed .spec.js files
+          FILES=$(git diff --name-only origin/"$BASE"...HEAD | grep '\.spec\.js$' || true)
 
-          if echo "$CHANGED_FILES" | grep '\.spec\.js$'; then
-            echo "✅ Now Unit Tests detected"
-          else
-            echo "ℹ️ No .spec.js files found in this PR"
+          if [ -z "$FILES" ]; then
+            echo "ℹ️ No .spec.js files found in this PR."
+            exit 0
           fi
+
+          echo "✅ Detected the following .spec.js files:"
+          echo "$FILES"
+
+          # Start JSON object
+          echo "📦 Printing file contents as JSON:"
+          echo "{"
+          FIRST=1
+          for FILE in $FILES; do
+            if [ -f "$FILE" ]; then
+              CONTENT=$(jq -Rs . < "$FILE")  # Read and JSON-escape file content
+              if [ $FIRST -eq 1 ]; then
+                FIRST=0
+              else
+                echo ","
+              fi
+              echo -n "  \"$FILE\": $CONTENT"
+            fi
+          done
+          echo ""
+          echo "}"
