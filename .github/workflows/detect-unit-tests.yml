@@ -9,11 +9,15 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
 
+    permissions:  # Needed to comment on PR and upload artifact
+      pull-requests: write
+      contents: read
+
     steps:
       - name: Checkout PR branch code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Full history to allow branch diff
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -67,7 +71,31 @@ jobs:
           echo "🧪 Running tests with coverage..."
           npm run coverage
 
-      - name: Print Coverage Summary
-        run: |
-          echo "📊 Jest Coverage Summary:"
-          cat coverage/coverage-summary.json || echo "No coverage report found"
+      - name: Upload HTML Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage/lcov-report
+          retention-days: 7
+
+      - name: Post Jest Coverage Summary as PR Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'coverage/coverage-summary.json';
+            if (!fs.existsSync(path)) {
+              core.setFailed('❌ coverage-summary.json not found');
+            } else {
+              const summary = JSON.parse(fs.readFileSync(path, 'utf8')).total;
+              const format = (obj) => `- 🧪 **Statements**: ${obj.statements.pct}% | **Branches**: ${obj.branches.pct}% | **Functions**: ${obj.functions.pct}% | **Lines**: ${obj.lines.pct}%`;
+
+              const body = `### ✅ Jest Code Coverage Report\n${format(summary)}\n\n📁 [Download HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) → Artifacts section`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }
