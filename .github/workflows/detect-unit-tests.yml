@@ -1,4 +1,4 @@
-name: Detect Unit Test PR and Print .spec.js Files + Coverage
+name: Detect and Run Unit Tests with Coverage
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ jobs:
     if: github.event.pull_request.draft == false
 
     steps:
-      - name: Checkout code
+      - name: Checkout PR branch code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history to allow branch diff
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -62,12 +62,12 @@ jobs:
           echo ""
           echo "}"
 
-      - name: Run Jest Tests with Coverage
+      - name: Run Jest with Coverage
         run: |
-          echo "🧪 Running Jest with coverage..."
-          npm run coverage || exit 1
+          echo "🧪 Running tests with coverage..."
+          npm run coverage
 
-      - name: Print Jest Coverage Summary
+      - name: Print Coverage Summary
         run: |
           echo "📊 Jest Coverage Summary:"
           cat coverage/coverage-summary.json || echo "No coverage report found"
