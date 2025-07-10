@@ -1,0 +1,12 @@
+{
+  "name": "now-unit-sample",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "test": "jest",
+    "coverage": "jest --coverage"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
