@@ -12,22 +12,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Install GitHub CLI
-        run: |
-          sudo apt update
-          sudo apt install gh -y
-
       - name: Check for .spec.js files in PR
         run: |
-          echo "Checking PR for .spec.js files..."
-          pr_number=${{ github.event.pull_request.number }}
-          changed_files=$(gh pr view "$pr_number" --json files --jq '.files[].path')
-          echo "$changed_files"
+          echo "🔍 Checking PR for .spec.js files..."
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
 
-          if echo "$changed_files" | grep '\.spec\.js$'; then
+          FILES=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/files" | jq -r '.[].filename')
+
+          echo "$FILES"
+
+          if echo "$FILES" | grep '\.spec\.js$'; then
             echo "✅ Now Unit Tests detected"
           else
             echo "ℹ️ No .spec.js test files found in this PR"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
