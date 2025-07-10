@@ -1,31 +1,73 @@
-name: Run Unit Tests and Print Coverage
+name: Detect Unit Test PR and Print .spec.js Files + Coverage
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - '**/*.spec.js'
 
 jobs:
-  run-tests:
+  check-spec-files:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install Dependencies
-        run: npm install
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Detect and Print .spec.js Files as JSON
+        run: |
+          echo "🔍 Checking for .spec.js files in PR..."
+
+          BASE="${{ github.event.pull_request.base.ref }}"
+          git fetch origin "$BASE"
+
+          FILES=$(git diff --name-only origin/"$BASE"...HEAD | grep '\.spec\.js$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "ℹ️ No .spec.js files found in this PR."
+            exit 0
+          fi
+
+          echo "✅ Detected the following .spec.js files:"
+          echo "$FILES"
+
+          echo "📦 Printing file contents as JSON:"
+          echo "{"
+          FIRST=1
+          for FILE in $FILES; do
+            if [ -f "$FILE" ]; then
+              CONTENT=$(jq -Rs . < "$FILE")
+              if [ $FIRST -eq 1 ]; then
+                FIRST=0
+              else
+                echo ","
+              fi
+              echo -n "  \"$FILE\": $CONTENT"
+            fi
+          done
+          echo ""
+          echo "}"
 
       - name: Run Jest Tests with Coverage
-        run: npm run coverage
-
-      - name: Print Coverage Summary
         run: |
-          echo "🧪 Jest Coverage Summary:"
-          cat coverage/coverage-summary.json
+          echo "🧪 Running Jest with coverage..."
+          npm run coverage || exit 1
+
+      - name: Print Jest Coverage Summary
+        run: |
+          echo "📊 Jest Coverage Summary:"
+          cat coverage/coverage-summary.json || echo "No coverage report found"
