@@ -1,36 +1,64 @@
-name: Jest Coverage and Test Summary Extraction
+name: Full Jest Coverage and Test Summary
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 jobs:
-  test-and-summary:
+  coverage-report:
     runs-on: ubuntu-latest
 
-    steps:
-      - name: 📦 Checkout code
-        uses: actions/checkout@v4
+    permissions:
+      contents: read
 
-      - name: 🟢 Setup Node.js
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 20
 
-      - name: 📥 Install dependencies
-        run: npm install
-
-      - name: 🧪 Run Jest with Coverage and Capture Output
+      - name: Install dependencies
         run: |
+          echo "📦 Installing dependencies..."
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run Jest and Save Output
+        run: |
+          echo "🧪 Running Jest with coverage..."
           mkdir -p temp
           npx jest --coverage --coverageReporters=text > temp/jest-output.txt
           cat temp/jest-output.txt
 
-      - name: 📊 Parse Jest Coverage Table Summary to JSON
+      - name: Extract Test Summary Info (Shell)
+        run: |
+          echo "📦 Extracting test summary..."
+          OUTPUT=$(cat temp/jest-output.txt)
+          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
+          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
+          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
+          jq -n \
+            --arg test_suites "$TEST_SUITES" \
+            --arg tests "$TESTS" \
+            --arg snapshots "$SNAPSHOTS" \
+            --arg time "$TIME" \
+            '{
+              test_suites: $test_suites,
+              tests: $tests,
+              snapshots: $snapshots,
+              time: $time
+            }' > jest-run-summary.json
+          cat jest-run-summary.json
+
+      - name: Parse Jest Coverage Table Summary to JSON (Node.js)
         run: |
           node <<'EOF'
           const fs = require('fs');
@@ -55,55 +83,17 @@ jobs:
               branches: parts[2],
               functions: parts[3],
               lines: parts[4],
-              uncovered: parts[5] || ''
+              uncovered_lines: parts[5] || ''
             });
           }
 
           fs.writeFileSync('coverage-table-summary.json', JSON.stringify(data, null, 2));
           EOF
 
-      - name: 📄 Extract Jest Test Summary and Passed Files
-        run: |
-          node <<'EOF'
-          const fs = require('fs');
-          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
-          const lines = text.split('\n');
-
-          const summary = {
-            passedFiles: [],
-            suites: '',
-            tests: '',
-            snapshots: '',
-            time: ''
-          };
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-
-            if (trimmed.startsWith('PASS')) {
-              summary.passedFiles.push(trimmed);
-            }
-            if (trimmed.startsWith('Test Suites:')) {
-              summary.suites = trimmed;
-            }
-            if (trimmed.startsWith('Tests:')) {
-              summary.tests = trimmed;
-            }
-            if (trimmed.startsWith('Snapshots:')) {
-              summary.snapshots = trimmed;
-            }
-            if (trimmed.startsWith('Time:')) {
-              summary.time = trimmed;
-            }
-          }
-
-          fs.writeFileSync('jest-run-summary.json', JSON.stringify(summary, null, 2));
-          EOF
-
-      - name: 🗂 Upload JSON Artifacts
+      - name: Upload JSON Summary Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: jest-summary-json
           path: |
-            coverage-table-summary.json
             jest-run-summary.json
+            coverage-table-summary.json
