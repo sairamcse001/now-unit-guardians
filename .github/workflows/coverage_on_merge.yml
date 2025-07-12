@@ -1,0 +1,52 @@
+name: Coverage Report on Merge to Main
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  generate-coverage-report:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read  # required for actions/checkout
+      id-token: write  # optional if uploading to external services
+
+    steps:
+      - name: Checkout latest main branch
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run tests with Jest and generate coverage
+        run: |
+          echo "🧪 Running tests with coverage..."
+          npm run coverage
+
+      - name: Print Full Coverage Summary as JSON
+        run: |
+          echo "📊 Full Jest Coverage Summary (JSON):"
+          if [ -f coverage/coverage-summary.json ]; then
+            cat coverage/coverage-summary.json | jq .
+          else
+            echo "❌ No coverage-summary.json found"
+            exit 1
+          fi
+
+      - name: Upload HTML Coverage Report (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-coverage-report
+          path: coverage/lcov-report
