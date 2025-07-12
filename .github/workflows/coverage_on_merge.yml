@@ -38,7 +38,7 @@ jobs:
           const lines = text.split('\n');
 
           const start = lines.findIndex(line => line.includes('File')) + 1;
-          const end = lines.findIndex((line, i) => i > start && line.trim() === '');
+          const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
 
           const data = [];
 
@@ -78,24 +78,22 @@ jobs:
           };
 
           for (const line of lines) {
-            if (line.startsWith('PASS')) {
-              summary.passedFiles.push(line.trim());
-            }
+            const trimmed = line.trim();
 
-            if (/^Test Suites:/.test(line)) {
-              summary.suites = line.trim();
+            if (trimmed.startsWith('PASS')) {
+              summary.passedFiles.push(trimmed);
             }
-
-            if (/^Tests:/.test(line)) {
-              summary.tests = line.trim();
+            if (trimmed.startsWith('Test Suites:')) {
+              summary.suites = trimmed;
             }
-
-            if (/^Snapshots:/.test(line)) {
-              summary.snapshots = line.trim();
+            if (trimmed.startsWith('Tests:')) {
+              summary.tests = trimmed;
             }
-
-            if (/^Time:/.test(line)) {
-              summary.time = line.trim();
+            if (trimmed.startsWith('Snapshots:')) {
+              summary.snapshots = trimmed;
+            }
+            if (trimmed.startsWith('Time:')) {
+              summary.time = trimmed;
             }
           }
 
