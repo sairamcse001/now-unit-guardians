@@ -1,4 +1,4 @@
-name: Full Jest Coverage and Test Summary
+name: Jest Coverage and Test Summary Extraction
 
 on:
   push:
@@ -9,16 +9,11 @@ on:
       - main
 
 jobs:
-  test-and-coverage:
-    name: Run Tests & Generate Coverage Report
+  test-and-summary:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      actions: write
-
     steps:
-      - name: 📦 Checkout Code
+      - name: 📦 Checkout code
         uses: actions/checkout@v4
 
       - name: 🟢 Setup Node.js
@@ -26,28 +21,79 @@ jobs:
         with:
           node-version: '18'
 
-      - name: 📥 Install Dependencies
+      - name: 📥 Install dependencies
         run: npm install
 
-      - name: 🧪 Run Jest with Coverage and JSON Output
+      - name: 🧪 Run Jest with Coverage and Capture Output
         run: |
-          npx jest --coverage \
-                   --json \
-                   --outputFile=jest-summary.json \
-                   --coverageReporters=json-summary \
-                   --coverageReporters=json \
-                   --coverageReporters=text
+          mkdir -p temp
+          npx jest --coverage --coverageReporters=text > temp/jest-output.txt
+          cat temp/jest-output.txt
 
-      - name: 📁 Display Coverage Summary
+      - name: 📊 Parse Jest Coverage Table Summary to JSON
         run: |
-          echo "Summary:"
-          cat coverage/coverage-summary.json
+          node <<'EOF'
+          const fs = require('fs');
+          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
+          const lines = text.split('\n');
 
-      - name: 🗂️ Upload Coverage JSON & Test Summary
+          const start = lines.findIndex(line => line.includes('File')) + 1;
+          const end = lines.findIndex((line, i) => i > start && line.trim() === '');
+
+          const data = [];
+
+          for (let i = start; i < end; i++) {
+            const line = lines[i].trim();
+            if (!line || line.startsWith('---')) continue;
+
+            const parts = line.split('|').map(part => part.trim());
+            if (parts.length < 6) continue;
+
+            data.push({
+              file: parts[0],
+              statements: parts[1],
+              branches: parts[2],
+              functions: parts[3],
+              lines: parts[4],
+              uncovered: parts[5] || ''
+            });
+          }
+
+          fs.writeFileSync('coverage-table-summary.json', JSON.stringify(data, null, 2));
+          EOF
+
+      - name: 📄 Extract Jest Test Summary and Passed Files
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
+          const lines = text.split('\n');
+
+          const passLines = lines.filter(line => line.startsWith('PASS ')).map(line => line.trim());
+
+          const summaryLine = lines.find(line => line.includes('Test Suites:'));
+          const summary = {
+            passedFiles: passLines,
+            suites: '',
+            tests: '',
+            snapshots: '',
+            time: ''
+          };
+
+          lines.forEach(line => {
+            if (line.includes('Test Suites:')) summary.suites = line.trim();
+            if (line.includes('Tests:')) summary.tests = line.trim();
+            if (line.includes('Snapshots:')) summary.snapshots = line.trim();
+            if (line.includes('Time:')) summary.time = line.trim();
+          });
+
+          fs.writeFileSync('jest-run-summary.json', JSON.stringify(summary, null, 2));
+          EOF
+
+      - name: 🗂 Upload JSON Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: jest-test-results
+          name: jest-summary-json
           path: |
-            jest-summary.json
-            coverage/coverage-summary.json
-            coverage/coverage-final.json
+            coverage-table-summary.json
+            jest-run-summary.json
