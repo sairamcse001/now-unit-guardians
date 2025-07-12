@@ -4,95 +4,50 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  coverage-report:
+  test-and-coverage:
+    name: Run Tests & Generate Coverage Report
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
+      actions: write
 
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v3
+      - name: 📦 Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '18'
 
-      - name: Install dependencies
+      - name: 📥 Install Dependencies
+        run: npm install
+
+      - name: 🧪 Run Jest with Coverage and JSON Output
         run: |
-          echo "📦 Installing dependencies..."
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          npx jest --coverage \
+                   --json \
+                   --outputFile=jest-summary.json \
+                   --coverageReporters=json-summary \
+                   --coverageReporters=json \
+                   --coverageReporters=text
 
-      - name: Run Jest and Parse Coverage Table to JSON
+      - name: 📁 Display Coverage Summary
         run: |
-          echo "🧪 Running Jest with coverage..."
-          OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
+          echo "Summary:"
+          cat coverage/coverage-summary.json
 
-          echo "📦 Extracting test summary..."
-          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
-          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
-          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
-
-          echo "📦 Parsing coverage table..."
-          COVERAGE_LINES=$(echo "$OUTPUT" | awk '
-            BEGIN { inside=0 }
-            /^[-]+[|][-]+$/ { inside=1; next }
-            inside && /^[^-|]/ { print }
-            inside && /^[-]+[|][-]+$/ { exit }
-          ')
-
-          COVERAGE_JSON="[]"
-
-          while IFS= read -r LINE; do
-            # Remove leading/trailing pipes and trim
-            CLEAN=$(echo "$LINE" | sed 's/^ *|//; s/| *$//' | sed 's/  */ /g')
-
-            FILE=$(echo "$CLEAN" | cut -d ' ' -f1)
-            STMT=$(echo "$CLEAN" | awk '{print $(NF-4)}')
-            BRANCH=$(echo "$CLEAN" | awk '{print $(NF-3)}')
-            FUNC=$(echo "$CLEAN" | awk '{print $(NF-2)}')
-            LINES_COV=$(echo "$CLEAN" | awk '{print $(NF-1)}')
-            UNCOVERED=$(echo "$LINE" | awk -F "|" '{gsub(/^[ \t]+|[ \t]+$/, "", $NF); print $NF}')
-
-            ENTRY=$(jq -n \
-              --arg file "$FILE" \
-              --arg statements "$STMT" \
-              --arg branches "$BRANCH" \
-              --arg functions "$FUNC" \
-              --arg lines "$LINES_COV" \
-              --arg uncovered_lines "$UNCOVERED" \
-              '{file: $file, statements: $statements, branches: $branches, functions: $functions, lines: $lines, uncovered_lines: $uncovered_lines}')
-
-            COVERAGE_JSON=$(echo "$COVERAGE_JSON" | jq ". += [$ENTRY]")
-          done <<< "$COVERAGE_LINES"
-
-          BUILD_ERROR=false
-          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
-          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
-
-          echo "📊 Final Structured JSON:"
-          jq -n \
-            --argjson build_error "$BUILD_ERROR" \
-            --arg test_suites "$TEST_SUITES" \
-            --arg tests "$TESTS" \
-            --arg snapshots "$SNAPSHOTS" \
-            --arg time "$TIME" \
-            --argjson test_coverage "$COVERAGE_JSON" \
-            '{
-              build_error: $build_error,
-              test_summary: {
-                test_suites: $test_suites,
-                tests: $tests,
-                snapshots: $snapshots,
-                time: $time
-              },
-              test_coverage: $test_coverage
-            }'
+      - name: 🗂️ Upload Coverage JSON & Test Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-test-results
+          path: |
+            jest-summary.json
+            coverage/coverage-summary.json
+            coverage/coverage-final.json
