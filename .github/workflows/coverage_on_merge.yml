@@ -47,12 +47,19 @@ jobs:
           echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
 
           echo "📦 Parsing coverage table..."
-          COVERAGE_BLOCK=$(echo "$OUTPUT" | awk '/^[-]+[|][-]+/,/^[-]+[|][-]+/')
-          COVERAGE_ROWS=$(echo "$COVERAGE_BLOCK" | tail -n +2 | head -n -1)
+          # Extract only data rows (exclude headers and separator lines)
+          COVERAGE_ROWS=$(echo "$OUTPUT" | awk '
+            BEGIN { in_table=0 }
+            /^[ -]+\|[ -]+$/ {
+              if (in_table == 0) { in_table=1; next }
+              else { exit }
+            }
+            in_table == 1 { print }
+          ')
 
           COVERAGE_JSON_ARRAY="["
-
           FIRST=1
+
           while IFS= read -r LINE; do
             CLEAN=$(echo "$LINE" | tr -d '|' | awk '{$1=$1; print}')
             FILE=$(echo "$CLEAN" | awk '{print $1}')
@@ -60,7 +67,7 @@ jobs:
             BRANCH=$(echo "$CLEAN" | awk '{print $3}')
             FUNC=$(echo "$CLEAN" | awk '{print $4}')
             LINE_COV=$(echo "$CLEAN" | awk '{print $5}')
-            UNCOVERED=$(echo "$LINE" | awk -F '|' '{print $6}' | sed 's/^[[:space:]]*//')
+            UNCOVERED=$(echo "$LINE" | awk -F '|' '{print $2}' | sed 's/^[[:space:]]*//')
 
             ENTRY=$(jq -n \
               --arg file "$FILE" \
