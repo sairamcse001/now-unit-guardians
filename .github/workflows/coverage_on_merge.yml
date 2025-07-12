@@ -47,27 +47,32 @@ jobs:
           echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
 
           echo "📦 Parsing coverage table..."
-          # Extract only data rows (exclude headers and separator lines)
-          COVERAGE_ROWS=$(echo "$OUTPUT" | awk '
-            BEGIN { in_table=0 }
-            /^[ -]+\|[ -]+$/ {
-              if (in_table == 0) { in_table=1; next }
-              else { exit }
-            }
-            in_table == 1 { print }
-          ')
-
+          
           COVERAGE_JSON_ARRAY="["
           FIRST=1
 
-          while IFS= read -r LINE; do
-            CLEAN=$(echo "$LINE" | tr -d '|' | awk '{$1=$1; print}')
-            FILE=$(echo "$CLEAN" | awk '{print $1}')
-            STMT=$(echo "$CLEAN" | awk '{print $2}')
-            BRANCH=$(echo "$CLEAN" | awk '{print $3}')
-            FUNC=$(echo "$CLEAN" | awk '{print $4}')
-            LINE_COV=$(echo "$CLEAN" | awk '{print $5}')
-            UNCOVERED=$(echo "$LINE" | awk -F '|' '{print $2}' | sed 's/^[[:space:]]*//')
+          in_table=false
+          while IFS= read -r line; do
+            if [[ "$line" == *"File"* && "$line" == *"% Stmts"* ]]; then
+              in_table=true
+              continue
+            fi
+            [[ "$in_table" == false || "$line" =~ ^-+$ ]] && continue
+            [[ "$line" == "" ]] && continue
+
+            # Skip separators and header
+            if [[ "$line" =~ ^[-|]+$ ]]; then
+              continue
+            fi
+
+            # Parse line
+            FIELDS=($(echo "$line" | awk -F '|' '{for(i=1;i<=NF;i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1,$2,$3,$4,$5,$6}'))
+            FILE="${FIELDS[0]}"
+            STMT="${FIELDS[1]}"
+            BRANCH="${FIELDS[2]}"
+            FUNC="${FIELDS[3]}"
+            LINE_COV="${FIELDS[4]}"
+            UNCOVERED="${FIELDS[5]}"
 
             ENTRY=$(jq -n \
               --arg file "$FILE" \
@@ -84,7 +89,7 @@ jobs:
               COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY},"
             fi
             COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}${ENTRY}"
-          done <<< "$COVERAGE_ROWS"
+          done <<< "$(echo "$OUTPUT" | grep -E '^[^|]+ \| +[0-9]+ +\|')"
 
           COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}]"
 
