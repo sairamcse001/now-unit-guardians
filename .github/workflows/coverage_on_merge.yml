@@ -1,4 +1,4 @@
-name: Structured Jest Coverage and Test Summary
+name: Full Jest Coverage and Test Summary
 
 on:
   push:
@@ -30,70 +30,67 @@ jobs:
             npm install
           fi
 
-      - name: Run Jest and extract full structured JSON
+      - name: Run Jest and Build Final JSON Inline
         run: |
           echo "🧪 Running Jest with coverage..."
-          OUTPUT=$(npx jest --coverage 2>&1 | tee jest.log)
+          OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
 
-          echo "📦 Parsing test summary..."
+          echo "📦 Extracting test summary..."
 
-          # Extract test summary block
-          TEST_SUMMARY=$(awk '/Test Suites:/, /Ran all test suites/' jest.log)
+          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
+          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
+          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          # Initialize summary fields
-          TEST_SUITES=$(echo "$TEST_SUMMARY" | grep "Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
-          TESTS=$(echo "$TEST_SUMMARY" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          SNAPSHOTS=$(echo "$TEST_SUMMARY" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
-          TIME=$(echo "$TEST_SUMMARY" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
-
-          # Check if any suite/test failed
-          BUILD_ERROR="false"
-          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR="true"
-          echo "$TESTS" | grep -q "failed" && BUILD_ERROR="true"
+          BUILD_ERROR=false
+          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
+          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
 
           echo "📦 Parsing coverage table..."
+          COVERAGE_BLOCK=$(echo "$OUTPUT" | awk '/^[-]+[|][-]+/,/^[-]+[|][-]+/')
+          COVERAGE_ROWS=$(echo "$COVERAGE_BLOCK" | tail -n +2 | head -n -1)
 
-          # Extract coverage table block
-          awk '/^[-]+[|][-]+/,/^[-]+[|][-]+/' jest.log > coverage_table.txt
+          COVERAGE_JSON_ARRAY="["
 
-          # Skip first and last line (table border), parse the rows
-          tail -n +2 coverage_table.txt | head -n -1 > coverage_rows.txt
-
-          echo "[" > coverage_array.json
           FIRST=1
-          while IFS= read -r line; do
-            CLEAN=$(echo "$line" | tr -d '|' | awk '{$1=$1; print}')
+          while IFS= read -r LINE; do
+            CLEAN=$(echo "$LINE" | tr -d '|' | awk '{$1=$1; print}')
             FILE=$(echo "$CLEAN" | awk '{print $1}')
             STMT=$(echo "$CLEAN" | awk '{print $2}')
             BRANCH=$(echo "$CLEAN" | awk '{print $3}')
             FUNC=$(echo "$CLEAN" | awk '{print $4}')
             LINE_COV=$(echo "$CLEAN" | awk '{print $5}')
-            UNCOVERED=$(echo "$line" | awk -F '|' '{print $6}' | sed 's/^[[:space:]]*//')
+            UNCOVERED=$(echo "$LINE" | awk -F '|' '{print $6}' | sed 's/^[[:space:]]*//')
 
-            [ "$FIRST" -eq 0 ] && echo "," >> coverage_array.json
-            FIRST=0
-
-            jq -n \
+            ENTRY=$(jq -n \
               --arg file "$FILE" \
               --arg stm "$STMT" \
               --arg br "$BRANCH" \
               --arg fn "$FUNC" \
               --arg ln "$LINE_COV" \
               --arg unc "$UNCOVERED" \
-              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}' >> coverage_array.json
-          done < coverage_rows.txt
-          echo "]" >> coverage_array.json
+              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}')
+
+            if [ $FIRST -eq 1 ]; then
+              FIRST=0
+            else
+              COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY},"
+            fi
+            COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}${ENTRY}"
+          done <<< "$COVERAGE_ROWS"
+
+          COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}]"
 
           echo "📊 Final Structured JSON:"
           jq -n \
-            --arg build_error "$BUILD_ERROR" \
+            --argjson build_error "$BUILD_ERROR" \
             --arg test_suites "$TEST_SUITES" \
             --arg tests "$TESTS" \
             --arg snapshots "$SNAPSHOTS" \
             --arg time "$TIME" \
-            --slurpfile coverage test_coverage coverage_array.json \
+            --argjson test_coverage "$COVERAGE_JSON_ARRAY" \
             '{
-              build_error: ($build_error == "true"),
+              build_error: $build_error,
               test_summary: {
                 test_suites: $test_suites,
                 tests: $tests,
