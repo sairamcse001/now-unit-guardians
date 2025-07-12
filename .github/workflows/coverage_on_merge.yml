@@ -30,68 +30,53 @@ jobs:
             npm install
           fi
 
-      - name: Run Jest and Build Final JSON Inline
+      - name: Run Jest and Parse Coverage Table to JSON
         run: |
           echo "🧪 Running Jest with coverage..."
           OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
 
           echo "📦 Extracting test summary..."
-
           TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          BUILD_ERROR=false
-          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
-          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
-
           echo "📦 Parsing coverage table..."
-          
-          COVERAGE_JSON_ARRAY="["
-          FIRST=1
+          COVERAGE_LINES=$(echo "$OUTPUT" | awk '
+            BEGIN { inside=0 }
+            /^[-]+[|][-]+$/ { inside=1; next }
+            inside && /^[^-|]/ { print }
+            inside && /^[-]+[|][-]+$/ { exit }
+          ')
 
-          in_table=false
-          while IFS= read -r line; do
-            if [[ "$line" == *"File"* && "$line" == *"% Stmts"* ]]; then
-              in_table=true
-              continue
-            fi
-            [[ "$in_table" == false || "$line" =~ ^-+$ ]] && continue
-            [[ "$line" == "" ]] && continue
+          COVERAGE_JSON="[]"
 
-            # Skip separators and header
-            if [[ "$line" =~ ^[-|]+$ ]]; then
-              continue
-            fi
+          while IFS= read -r LINE; do
+            # Remove leading/trailing pipes and trim
+            CLEAN=$(echo "$LINE" | sed 's/^ *|//; s/| *$//' | sed 's/  */ /g')
 
-            # Parse line
-            FIELDS=($(echo "$line" | awk -F '|' '{for(i=1;i<=NF;i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1,$2,$3,$4,$5,$6}'))
-            FILE="${FIELDS[0]}"
-            STMT="${FIELDS[1]}"
-            BRANCH="${FIELDS[2]}"
-            FUNC="${FIELDS[3]}"
-            LINE_COV="${FIELDS[4]}"
-            UNCOVERED="${FIELDS[5]}"
+            FILE=$(echo "$CLEAN" | cut -d ' ' -f1)
+            STMT=$(echo "$CLEAN" | awk '{print $(NF-4)}')
+            BRANCH=$(echo "$CLEAN" | awk '{print $(NF-3)}')
+            FUNC=$(echo "$CLEAN" | awk '{print $(NF-2)}')
+            LINES_COV=$(echo "$CLEAN" | awk '{print $(NF-1)}')
+            UNCOVERED=$(echo "$LINE" | awk -F "|" '{gsub(/^[ \t]+|[ \t]+$/, "", $NF); print $NF}')
 
             ENTRY=$(jq -n \
               --arg file "$FILE" \
-              --arg stm "$STMT" \
-              --arg br "$BRANCH" \
-              --arg fn "$FUNC" \
-              --arg ln "$LINE_COV" \
-              --arg unc "$UNCOVERED" \
-              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}')
+              --arg statements "$STMT" \
+              --arg branches "$BRANCH" \
+              --arg functions "$FUNC" \
+              --arg lines "$LINES_COV" \
+              --arg uncovered_lines "$UNCOVERED" \
+              '{file: $file, statements: $statements, branches: $branches, functions: $functions, lines: $lines, uncovered_lines: $uncovered_lines}')
 
-            if [ $FIRST -eq 1 ]; then
-              FIRST=0
-            else
-              COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY},"
-            fi
-            COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}${ENTRY}"
-          done <<< "$(echo "$OUTPUT" | grep -E '^[^|]+ \| +[0-9]+ +\|')"
+            COVERAGE_JSON=$(echo "$COVERAGE_JSON" | jq ". += [$ENTRY]")
+          done <<< "$COVERAGE_LINES"
 
-          COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}]"
+          BUILD_ERROR=false
+          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
+          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
 
           echo "📊 Final Structured JSON:"
           jq -n \
@@ -100,7 +85,7 @@ jobs:
             --arg tests "$TESTS" \
             --arg snapshots "$SNAPSHOTS" \
             --arg time "$TIME" \
-            --argjson test_coverage "$COVERAGE_JSON_ARRAY" \
+            --argjson test_coverage "$COVERAGE_JSON" \
             '{
               build_error: $build_error,
               test_summary: {
