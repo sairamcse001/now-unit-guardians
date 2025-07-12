@@ -1,4 +1,4 @@
-name: Full Coverage and Error Report
+name: Structured Jest Coverage and Test Summary
 
 on:
   push:
@@ -6,14 +6,14 @@ on:
       - main
 
 jobs:
-  generate-coverage-report:
+  coverage-report:
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
 
     steps:
-      - name: Checkout latest main branch
+      - name: Checkout main
         uses: actions/checkout@v3
 
       - name: Setup Node.js
@@ -21,61 +21,84 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies with error handling
-        id: install
+      - name: Install dependencies
         run: |
           echo "📦 Installing dependencies..."
           if [ -f package-lock.json ]; then
-            npm ci || echo '{ "error": "Dependency installation failed" }' && exit 1
+            npm ci
           else
-            npm install || echo '{ "error": "Dependency installation failed" }' && exit 1
+            npm install
           fi
 
-      - name: Run Jest and extract coverage as JSON
-        id: coverage
+      - name: Run Jest and extract full structured JSON
         run: |
           echo "🧪 Running Jest with coverage..."
           OUTPUT=$(npx jest --coverage 2>&1 | tee jest.log)
 
-          # Check if any error occurred
-          if grep -q "FAIL" jest.log; then
-            echo '{ "error": "Test run failed" }'
-            exit 1
-          fi
+          echo "📦 Parsing test summary..."
 
-          # Extract 'All files' line
-          LINE=$(grep "^All files" jest.log)
+          # Extract test summary block
+          TEST_SUMMARY=$(awk '/Test Suites:/, /Ran all test suites/' jest.log)
 
-          if [ -z "$LINE" ]; then
-            echo '{ "error": "Coverage summary not found in output" }'
-            exit 1
-          fi
+          # Initialize summary fields
+          TEST_SUITES=$(echo "$TEST_SUMMARY" | grep "Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          TESTS=$(echo "$TEST_SUMMARY" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
+          SNAPSHOTS=$(echo "$TEST_SUMMARY" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
+          TIME=$(echo "$TEST_SUMMARY" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          # Remove | and % symbols, then split into fields
-          CLEAN=$(echo "$LINE" | tr -d '|' | tr -d '%' | awk '{$1=$1; print}')
+          # Check if any suite/test failed
+          BUILD_ERROR="false"
+          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR="true"
+          echo "$TESTS" | grep -q "failed" && BUILD_ERROR="true"
 
-          # Split the line into values
-          STATEMENTS=$(echo "$CLEAN" | awk '{print $2}')
-          BRANCHES=$(echo "$CLEAN" | awk '{print $3}')
-          FUNCTIONS=$(echo "$CLEAN" | awk '{print $4}')
-          LINES=$(echo "$CLEAN" | awk '{print $5}')
+          echo "📦 Parsing coverage table..."
 
-          # Print as clean JSON
+          # Extract coverage table block
+          awk '/^[-]+[|][-]+/,/^[-]+[|][-]+/' jest.log > coverage_table.txt
+
+          # Skip first and last line (table border), parse the rows
+          tail -n +2 coverage_table.txt | head -n -1 > coverage_rows.txt
+
+          echo "[" > coverage_array.json
+          FIRST=1
+          while IFS= read -r line; do
+            CLEAN=$(echo "$line" | tr -d '|' | awk '{$1=$1; print}')
+            FILE=$(echo "$CLEAN" | awk '{print $1}')
+            STMT=$(echo "$CLEAN" | awk '{print $2}')
+            BRANCH=$(echo "$CLEAN" | awk '{print $3}')
+            FUNC=$(echo "$CLEAN" | awk '{print $4}')
+            LINE_COV=$(echo "$CLEAN" | awk '{print $5}')
+            UNCOVERED=$(echo "$line" | awk -F '|' '{print $6}' | sed 's/^[[:space:]]*//')
+
+            [ "$FIRST" -eq 0 ] && echo "," >> coverage_array.json
+            FIRST=0
+
+            jq -n \
+              --arg file "$FILE" \
+              --arg stm "$STMT" \
+              --arg br "$BRANCH" \
+              --arg fn "$FUNC" \
+              --arg ln "$LINE_COV" \
+              --arg unc "$UNCOVERED" \
+              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}' >> coverage_array.json
+          done < coverage_rows.txt
+          echo "]" >> coverage_array.json
+
+          echo "📊 Final Structured JSON:"
           jq -n \
-            --arg stm "$STATEMENTS" \
-            --arg br "$BRANCHES" \
-            --arg fn "$FUNCTIONS" \
-            --arg ln "$LINES" \
+            --arg build_error "$BUILD_ERROR" \
+            --arg test_suites "$TEST_SUITES" \
+            --arg tests "$TESTS" \
+            --arg snapshots "$SNAPSHOTS" \
+            --arg time "$TIME" \
+            --slurpfile coverage test_coverage coverage_array.json \
             '{
-              statements: $stm,
-              branches: $br,
-              functions: $fn,
-              lines: $ln
+              build_error: ($build_error == "true"),
+              test_summary: {
+                test_suites: $test_suites,
+                tests: $tests,
+                snapshots: $snapshots,
+                time: $time
+              },
+              test_coverage: $test_coverage
             }'
-
-      - name: Upload HTML Coverage Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: html-coverage-report
-          path: coverage/lcov-report
