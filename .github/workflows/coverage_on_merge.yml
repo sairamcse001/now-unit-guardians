@@ -69,23 +69,35 @@ jobs:
           const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
           const lines = text.split('\n');
 
-          const passLines = lines.filter(line => line.startsWith('PASS ')).map(line => line.trim());
-
-          const summaryLine = lines.find(line => line.includes('Test Suites:'));
           const summary = {
-            passedFiles: passLines,
+            passedFiles: [],
             suites: '',
             tests: '',
             snapshots: '',
             time: ''
           };
 
-          lines.forEach(line => {
-            if (line.includes('Test Suites:')) summary.suites = line.trim();
-            if (line.includes('Tests:')) summary.tests = line.trim();
-            if (line.includes('Snapshots:')) summary.snapshots = line.trim();
-            if (line.includes('Time:')) summary.time = line.trim();
-          });
+          for (const line of lines) {
+            if (line.startsWith('PASS')) {
+              summary.passedFiles.push(line.trim());
+            }
+
+            if (/^Test Suites:/.test(line)) {
+              summary.suites = line.trim();
+            }
+
+            if (/^Tests:/.test(line)) {
+              summary.tests = line.trim();
+            }
+
+            if (/^Snapshots:/.test(line)) {
+              summary.snapshots = line.trim();
+            }
+
+            if (/^Time:/.test(line)) {
+              summary.time = line.trim();
+            }
+          }
 
           fs.writeFileSync('jest-run-summary.json', JSON.stringify(summary, null, 2));
           EOF
