@@ -1,4 +1,4 @@
-name: Coverage Report on Merge to Main
+name: Full Coverage and Error Report
 
 on:
   push:
@@ -10,8 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read  # required for actions/checkout
-      id-token: write  # optional if uploading to external services
+      contents: read
 
     steps:
       - name: Checkout latest main branch
@@ -22,30 +21,60 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install dependencies with error handling
+        id: install
         run: |
+          echo "📦 Installing dependencies..."
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || echo '{ "error": "Dependency installation failed" }' && exit 1
           else
-            npm install
+            npm install || echo '{ "error": "Dependency installation failed" }' && exit 1
           fi
 
-      - name: Run tests with Jest and generate coverage
+      - name: Run Jest and extract coverage as JSON
+        id: coverage
         run: |
-          echo "🧪 Running tests with coverage..."
-          npm run coverage
+          echo "🧪 Running Jest with coverage..."
+          OUTPUT=$(npx jest --coverage 2>&1 | tee jest.log)
 
-      - name: Print Full Coverage Summary as JSON
-        run: |
-          echo "📊 Full Jest Coverage Summary (JSON):"
-          if [ -f coverage/coverage-summary.json ]; then
-            cat coverage/coverage-summary.json | jq .
-          else
-            echo "❌ No coverage-summary.json found"
+          # Check if any error occurred
+          if grep -q "FAIL" jest.log; then
+            echo '{ "error": "Test run failed" }'
             exit 1
           fi
 
-      - name: Upload HTML Coverage Report (optional)
+          # Extract 'All files' line
+          LINE=$(grep "^All files" jest.log)
+
+          if [ -z "$LINE" ]; then
+            echo '{ "error": "Coverage summary not found in output" }'
+            exit 1
+          fi
+
+          # Remove | and % symbols, then split into fields
+          CLEAN=$(echo "$LINE" | tr -d '|' | tr -d '%' | awk '{$1=$1; print}')
+
+          # Split the line into values
+          STATEMENTS=$(echo "$CLEAN" | awk '{print $2}')
+          BRANCHES=$(echo "$CLEAN" | awk '{print $3}')
+          FUNCTIONS=$(echo "$CLEAN" | awk '{print $4}')
+          LINES=$(echo "$CLEAN" | awk '{print $5}')
+
+          # Print as clean JSON
+          jq -n \
+            --arg stm "$STATEMENTS" \
+            --arg br "$BRANCHES" \
+            --arg fn "$FUNCTIONS" \
+            --arg ln "$LINES" \
+            '{
+              statements: $stm,
+              branches: $br,
+              functions: $fn,
+              lines: $ln
+            }'
+
+      - name: Upload HTML Coverage Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: html-coverage-report
