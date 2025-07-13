@@ -93,55 +93,11 @@ jobs:
             exit 1
           fi
 
-      - name: Comment on PR with metrics link
+      - name: Comment on PR with preview link
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
           body: |
-            ✅ PR Metrics are available for review:
-            🔗 [View Metrics Preview](${{ env.PR_PREVIEW_LINK }})
-
-      - name: Determine PR Author Email
-        run: |
-          LOGIN="${{ github.event.pull_request.user.login }}"
-
-          # Try GitHub API first
-          EMAIL=$(curl -s "https://api.github.com/users/$LOGIN" | jq -r '.email')
-
-          # Fallback to last commit if GitHub email is null
-          if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
-            git fetch origin ${{ github.event.pull_request.head.ref }}
-            git checkout ${{ github.event.pull_request.head.ref }}
-            EMAIL=$(git log -1 --pretty=format:'%ae')
-          fi
-
-          # Final fallback to GitHub noreply
-          if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
-            EMAIL="$LOGIN@users.noreply.github.com"
-          fi
-
-          echo "AUTHOR_EMAIL=$EMAIL" >> $GITHUB_ENV
-          echo "✅ Using PR author email: $EMAIL"
-
-      - name: Send email to PR author
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Your PR Metrics Are Ready!"
-          to: ${{ env.AUTHOR_EMAIL }}
-          from: GitHub Metrics Bot <${{ secrets.EMAIL_USERNAME }}>
-          content_type: text/html
-          body: |
-            <p>Hi <strong>${{ github.event.pull_request.user.login }}</strong>,</p>
-            <p>Your pull request metrics have been published successfully.</p>
-            <p>
-              <strong>Preview Link:</strong><br>
-              <a href="${{ env.PR_PREVIEW_LINK }}">${{ env.PR_PREVIEW_LINK }}</a>
-            </p>
-            <p>Click the above link to see your metrics, coverage breakdown, and spec insights.</p>
-            <br>
-            <p>– Code Guardians Bot</p>
+            ✅ PR Metrics Preview Available  
+            🔗 [Click here to view the metrics](${{ env.PR_PREVIEW_LINK }})
