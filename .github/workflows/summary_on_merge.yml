@@ -1,4 +1,4 @@
-name: Full Jest Coverage and Test Summary
+name: Full Jest Coverage 
 
 on:
   push:
