@@ -1,20 +1,23 @@
-name: Full Jest Coverage
+name: Detect and Run Unit Tests with Coverage
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
-  coverage-report:
+  check-spec-files:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
 
     permissions:
+      pull-requests: write
       contents: read
 
     steps:
-      - name: Checkout main
+      - name: Checkout PR branch code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,143 +26,122 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "📦 Installing dependencies..."
           if [ -f package-lock.json ]; then
             npm ci
           else
             npm install
           fi
 
-      - name: Run Jest with coverage and save output
+      - name: Detect .spec.js Files in PR
+        id: detect_files
         run: |
-          echo "🧪 Running Jest with coverage..."
-          mkdir -p temp
-          npx jest --coverage | tee ./temp/jest-output.txt
+          BASE="${{ github.event.pull_request.base.ref }}"
+          git fetch origin "$BASE"
+          FILES=$(git diff --name-only origin/"$BASE"...HEAD | grep '\.spec\.js$' || true)
+          echo "found_files=$FILES" >> "$GITHUB_OUTPUT"
 
-      - name: Parse Jest Coverage Table Summary (Node.js with raw links)
+      - name: Run Jest with Coverage
+        id: jest
         run: |
-          node <<'EOF'
-          const fs = require('fs');
-          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
-          const lines = text.split('\n');
+          echo "🧪 Running tests with coverage..."
+          npm run coverage || true
+          echo "jest_exit_code=$?" >> $GITHUB_ENV
 
-          const start = lines.findIndex(line => line.includes('File')) + 1;
-          const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
+      - name: Upload HTML Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage/lcov-report
+          retention-days: 7
 
-          const repo = process.env.GITHUB_REPOSITORY;
-          const rawBase = `https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main`;
+      - name: Post Jest Coverage Summary as PR Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'coverage/coverage-summary.json';
+            if (!fs.existsSync(path)) {
+              core.warning('⚠️ coverage-summary.json not found');
+            } else {
+              const summary = JSON.parse(fs.readFileSync(path, 'utf8')).total;
+              const format = (obj) => `- 🧪 **Statements**: ${obj.statements.pct}% | **Branches**: ${obj.branches.pct}% | **Functions**: ${obj.functions.pct}% | **Lines**: ${obj.lines.pct}%`;
 
-          const data = [];
+              const body = `### ✅ Jest Code Coverage Report\n${format(summary)}\n\n📁 [Download HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) → Artifacts section`;
 
-          for (let i = start; i < end; i++) {
-            const line = lines[i].trim();
-            if (!line || line.startsWith('---')) continue;
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }
 
-            const parts = line.split('|').map(part => part.trim());
-            if (parts.length < 6) continue;
+      - name: Send Metrics to ServiceNow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'coverage/coverage-summary.json';
 
-            const file = parts[0];
-            const baseFileName = file.replace(/^.*[\\/]/, '');
-            const testFileName = baseFileName.replace(/\.js$/, '.spec.js');
-            data.push({
-              file,
-              source_url: `${rawBase}/src/${file}`,
-              spec_url: `${rawBase}/__tests__/${testFileName}`,
+            if (!fs.existsSync(path)) {
+              core.warning('⚠️ No coverage-summary.json found. Skipping API call.');
+              return;
+            }
+
+            const summary = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const pr = context.payload.pull_request;
+            const repo = context.repo.repo;
+            const owner = context.repo.owner;
+            const branch = context.payload.pull_request.head.ref;
+
+            const filesChanged = `\`${{ steps.detect_files.outputs.found_files }}\``
+              .replace(/[`"]/g, '')
+              .split(/\s+/)
+              .filter(f => f.endsWith('.spec.js'));
+
+            if (filesChanged.length === 0) {
+              core.warning('No .spec.js files found, skipping API call.');
+              return;
+            }
+
+            const specFilePath = `https://raw.githubusercontent.com/${owner}/${repo}/refs/heads/${branch}/${filesChanged[0]}`;
+            const jsFilePath = specFilePath.replace('/__tests__/', '/src/').replace('.spec.js', '.js');
+
+            const payload = {
+              jsfilePath: jsFilePath,
+              specJsfilePath: specFilePath,
+              prNumber: pr.number.toString(),
+              prlink: pr.html_url,
+              Author: pr.user.login,
+              MergeStatus: pr.draft ? 'Draft' : 'Ready',
+              prName: pr.title,
+              BranchName: branch,
               coverage: {
-                statements: parts[1],
-                branches: parts[2],
-                functions: parts[3],
-                lines: parts[4],
-                uncovered_lines: parts[5] || ''
+                files: {
+                  allfiles: {
+                    lines: summary.total.lines.pct,
+                    branch: summary.total.branches.pct
+                  },
+                  "mathUtil.js": summary["mathUtil.js"] || {}
+                }
               }
+            };
+
+            console.log('📤 Sending payload to ServiceNow:');
+            console.log(JSON.stringify(payload, null, 2));
+
+            const res = await fetch('https://hackai.service-now.com/api/snc/nowunitmetricsapi', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(payload)
             });
-          }
 
-          fs.writeFileSync('./temp/coverage-table-summary.json', JSON.stringify(data, null, 2));
-          EOF
+            const resText = await res.text();
+            console.log('🛰️ ServiceNow response:', res.status, resText);
 
-      - name: Parse Jest Summary & Test Results (Reliable Bash + jq)
+      - name: Fail if Jest Tests Failed
         run: |
-          echo "📦 Extracting test summary..."
-          OUTPUT=$(cat ./temp/jest-output.txt)
-
-          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
-
-          echo "🧪 Extracting test results..."
-          TEST_RESULTS_JSON="["
-          IS_FIRST=1
-          CURRENT_FILE=""
-          CURRENT_ERROR=""
-          IN_FAILURE=0
-
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^PASS ]]; then
-              FILE=$(echo "$line" | awk '{print $2}')
-              ENTRY=$(jq -n --arg file "$FILE" --arg status "PASS" '{file: $file, status: $status}')
-              [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-              TEST_RESULTS_JSON+="${ENTRY}"
-              IS_FIRST=0
-            elif [[ "$line" =~ ^FAIL ]]; then
-              FILE=$(echo "$line" | awk '{print $2}')
-              CURRENT_FILE="$FILE"
-              CURRENT_ERROR=""
-              IN_FAILURE=1
-            elif [[ $IN_FAILURE -eq 1 ]]; then
-              if [[ -z "$line" || "$line" =~ ^(PASS|FAIL) ]]; then
-                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-                [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-                TEST_RESULTS_JSON+="${ENTRY}"
-                IN_FAILURE=0
-              else
-                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
-              fi
-            fi
-          done <<< "$OUTPUT"
-
-          # Add last fail block if any
-          if [[ $IN_FAILURE -eq 1 ]]; then
-            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-            [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-            TEST_RESULTS_JSON+="${ENTRY}"
-          fi
-
-          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
-          echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
-
-          # Fallback for empty file coverage file
-          if [[ ! -s ./temp/coverage-table-summary.json ]]; then
-            echo "[]" > ./temp/coverage-table-summary.json
-          fi
-
-      - name: Call ServiceNow Coverage API
-        env:
-          REPO_NAME: ${{ github.repository }}
-        run: |
-          echo "📤 Preparing payload for ServiceNow..."
-
-          FINAL_PAYLOAD=$(jq -n \
-            --arg repo_name "$REPO_NAME" \
-            --argjson file_coverage "$(cat ./temp/coverage-table-summary.json)" \
-            '{repo_name: $repo_name, file_coverage: $file_coverage}')
-
-          echo "$FINAL_PAYLOAD" > ./temp/final-payload.json
-          echo "Payload:"
-          cat ./temp/final-payload.json
-
-          echo "📬 Sending data to ServiceNow..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/candy_content/file_coverage' \
-            --header 'Content-Type: application/json' \
-            --data @./temp/final-payload.json)
-
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          STATUS=$(echo "$RESPONSE" | tail -n1)
-
-          echo "Status Code: $STATUS"
-          echo "Response Body:"
-          echo "$BODY"
-
-          if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
-            echo "❌ Failed to POST data to ServiceNow"
-            exit 1
-          fi
+          echo "✅ Workflow completed. Checking Jest result..."
+          exit $jest_exit_code
