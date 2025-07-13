@@ -91,12 +91,12 @@ jobs:
 
           echo "🛠️ Building JSON payload..."
           FINAL_JSON=$(jq -n \
-            --arg repo_name "now-unit-guardians" \
+            --arg repo_name "sairamcse001/now-unit-guardians" \
             --arg tests "$TESTS" \
             --arg time "$TIME" \
             --argjson test_results "$TEST_RESULTS_JSON" \
             '{
-              repo_name: $repo_name,
+              repo_name: process.env.GITHUB_REPOSITORY,
               test_summary: {
                 tests: $tests,
                 time: $time
