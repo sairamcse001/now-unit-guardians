@@ -1,4 +1,4 @@
-const mathUtil = require('../src/mathUtil');
+const mathUtil = require('../src/mathUtil2');
 
 describe('mathUtil', () => {
   it('should add two numbers', () => {
