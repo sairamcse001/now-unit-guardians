@@ -41,7 +41,7 @@ jobs:
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          echo "🧪 Extracting pass/fail and errors..."
+          echo "🧪 Extracting test results..."
           TEST_RESULTS_JSON="["
           IS_FIRST=1
           CURRENT_FILE=""
@@ -58,30 +58,34 @@ jobs:
                 TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
               fi
               TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+              IN_FAILURE=0
             elif [[ "$line" =~ ^FAIL ]]; then
-              FILE=$(echo "$line" | awk '{print $2}')
-              CURRENT_FILE="$FILE"
-              CURRENT_ERROR=""
-              IN_FAILURE=1
-            elif [[ $IN_FAILURE -eq 1 ]]; then
-              if [[ "$line" == "" || "$line" =~ ^PASS || "$line" =~ ^FAIL ]]; then
-                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+              if [[ "$CURRENT_FILE" != "" && "$CURRENT_ERROR" != "" ]]; then
+                # Flush previous error block
+                ENTRY=$(jq -Rs --arg file "$CURRENT_FILE" --arg status "FAIL" \
+                        --arg error "$CURRENT_ERROR" \
+                        '{file: $file, status: $status, error: $error}')
                 if [[ $IS_FIRST -eq 1 ]]; then
                   IS_FIRST=0
                 else
                   TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
                 fi
                 TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
-                IN_FAILURE=0
-              else
-                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
               fi
+              CURRENT_FILE=$(echo "$line" | awk '{print $2}')
+              CURRENT_ERROR=""
+              IN_FAILURE=1
+            elif [[ $IN_FAILURE -eq 1 ]]; then
+              # Preserve indentation and newline formatting
+              CURRENT_ERROR="${CURRENT_ERROR}${line}\n"
             fi
           done <<< "$OUTPUT"
 
-          # Capture last error block if script ends on a FAIL
-          if [[ $IN_FAILURE -eq 1 ]]; then
-            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+          # Flush final failure block if any
+          if [[ $IN_FAILURE -eq 1 && "$CURRENT_FILE" != "" && "$CURRENT_ERROR" != "" ]]; then
+            ENTRY=$(jq -Rs --arg file "$CURRENT_FILE" --arg status "FAIL" \
+                    --arg error "$CURRENT_ERROR" \
+                    '{file: $file, status: $status, error: $error}')
             if [[ $IS_FIRST -eq 1 ]]; then
               IS_FIRST=0
             else
