@@ -99,6 +99,7 @@ jobs:
               specJsfilePath: $specJsfilePath,
               prNumber: $prNumber,
               prlink: $prlink,
+              prName: $prName,
               Author: $Author,
               MergeStatus: $MergeStatus,
               prName: $prName,
