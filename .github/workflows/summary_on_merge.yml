@@ -96,7 +96,7 @@ jobs:
             --arg time "$TIME" \
             --argjson test_results "$TEST_RESULTS_JSON" \
             '{
-              repo_name: process.env.GITHUB_REPOSITORY,
+              repo_name: $repo_name,
               test_summary: {
                 tests: $tests,
                 time: $time
