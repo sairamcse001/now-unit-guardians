@@ -1,1 +1,159 @@
+name: Full Jest Coverage with tables
 
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  coverage-report:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run Jest with coverage and save output
+        run: |
+          echo "🧪 Running Jest with coverage..."
+          mkdir -p temp
+          npx jest --coverage | tee ./temp/jest-output.txt
+
+      - name: Parse Jest Coverage Table Summary to JSON (Node.js)
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
+          const lines = text.split('\n');
+
+          const start = lines.findIndex(line => line.includes('File')) + 1;
+          const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
+
+          const repo = process.env.GITHUB_REPOSITORY;
+          const baseUrl = `https://github.com/${repo}/blob/main`;
+
+          const data = [];
+
+          for (let i = start; i < end; i++) {
+            const line = lines[i].trim();
+            if (!line || line.startsWith('---')) continue;
+
+            const parts = line.split('|').map(part => part.trim());
+            if (parts.length < 6 || parts[0] === 'All files') continue;
+
+            const file = parts[0];
+            const baseFileName = file.replace(/^.*[\\/]/, '');
+            const testFileName = baseFileName.replace(/\.js$/, '.spec.js');
+
+            data.push({
+              file,
+              source_url: `${baseUrl}/src/${file}`,
+              spec_url: `${baseUrl}/__tests__/${testFileName}`,
+              coverage: {
+                statements: parts[1],
+                branches: parts[2],
+                functions: parts[3],
+                lines: parts[4],
+                uncovered_lines: parts[5] || ''
+              }
+            });
+          }
+
+          fs.writeFileSync('./temp/coverage-table-summary.json', JSON.stringify(data, null, 2));
+          EOF
+
+      - name: Parse Jest Summary and Errors (Bash + jq)
+        run: |
+          echo "📦 Extracting summary and errors..."
+          OUTPUT=$(cat ./temp/jest-output.txt)
+
+          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
+          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
+          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
+
+          TEST_RESULTS_JSON="["
+          IS_FIRST=1
+          CURRENT_FILE=""
+          CURRENT_ERROR=""
+          IN_FAILURE=0
+
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^PASS ]]; then
+              FILE=$(echo "$line" | awk '{print $2}')
+              ENTRY=$(jq -n --arg file "$FILE" --arg status "PASS" '{file: $file, status: $status}')
+              if [[ $IS_FIRST -eq 1 ]]; then
+                IS_FIRST=0
+              else
+                TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
+              fi
+              TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+            elif [[ "$line" =~ ^FAIL ]]; then
+              FILE=$(echo "$line" | awk '{print $2}')
+              CURRENT_FILE="$FILE"
+              CURRENT_ERROR=""
+              IN_FAILURE=1
+            elif [[ $IN_FAILURE -eq 1 ]]; then
+              if [[ "$line" == "" || "$line" =~ ^PASS || "$line" =~ ^FAIL ]]; then
+                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+                if [[ $IS_FIRST -eq 1 ]]; then
+                  IS_FIRST=0
+                else
+                  TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
+                fi
+                TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+                IN_FAILURE=0
+              else
+                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
+              fi
+            fi
+          done <<< "$OUTPUT"
+
+          if [[ $IN_FAILURE -eq 1 ]]; then
+            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+            if [[ $IS_FIRST -eq 1 ]]; then
+              IS_FIRST=0
+            else
+              TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
+            fi
+            TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+          fi
+
+          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
+          echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
+
+          echo "📊 Generating Final Structured JSON:"
+          jq -n \
+            --arg test_suites "$TEST_SUITES" \
+            --arg tests "$TESTS" \
+            --arg snapshots "$SNAPSHOTS" \
+            --arg time "$TIME" \
+            --argjson test_results "$(cat ./temp/test-results.json)" \
+            --argjson file_coverage "$(cat ./temp/coverage-table-summary.json)" \
+            '{
+              test_summary: {
+                test_suites: $test_suites,
+                tests: $tests,
+                snapshots: $snapshots,
+                time: $time
+              },
+              test_results: $test_results,
+              file_coverage: $file_coverage
+            }'
