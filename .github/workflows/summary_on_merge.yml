@@ -43,7 +43,14 @@ jobs:
 
           echo "📊 Extracting file coverage..."
           REPO_URL="https://github.com/${{ github.repository }}/blob/main"
-          COVERAGE_LINES=$(echo "$OUTPUT" | awk '/^\s*-{10}/ {found++; next} found==1 {print}' | sed '/^-{10}/q')
+
+          # Skip dashed lines and table header
+          COVERAGE_LINES=$(echo "$OUTPUT" | awk '
+            /^\s*-{10}/ {dashes++}
+            dashes == 1 {next}
+            dashes == 2 {exit}
+            dashes == 1 {print}
+          ')
 
           FILE_COVERAGE_JSON="["
           IS_FIRST_COV=1
@@ -59,7 +66,6 @@ jobs:
             LINE_COV=$(echo "$line" | awk '{print $5}')
             UNCOV=$(echo "$line" | cut -d'|' -f6- | sed 's/^[[:space:]]*//')
 
-            # Construct raw GitHub URLs
             RAW_SRC_URL="${REPO_URL}/src/${FILE}"
             SPEC_NAME="$(basename "$FILE" .js).spec.js"
             RAW_SPEC_URL="${REPO_URL}/__tests__/${SPEC_NAME}"
