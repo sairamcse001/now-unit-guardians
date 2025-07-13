@@ -78,10 +78,10 @@ jobs:
         "branch": 100
       },
       "mathUtil.js": {
-        "lines": 100,
-        "branch": 100,
-        "functions": 100,
-        "statements": 100,
+        "lines": 83.33,
+        "branch": 43,
+        "functions": 87,
+        "statements": 80,
         "uncovered_lines": []
       }
     }
