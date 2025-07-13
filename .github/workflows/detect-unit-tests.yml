@@ -2,7 +2,7 @@ name: PR ServiceNow Notify
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]  # added 'synchronize' to capture new commits to PR
     branches:
       - main
 
@@ -56,7 +56,6 @@ jobs:
               jsfilePath: $jsfilePath,
               specJsfilePath: $specJsfilePath,
               prNumber: $prNumber,
-              prName : $prName
               prlink: $prlink,
               Author: $Author,
               MergeStatus: $MergeStatus,
@@ -65,8 +64,9 @@ jobs:
               coverage: $coverage
             }')
 
-          echo "$FINAL_PAYLOAD" > ./temp-pr-payload.json
-          cat ./temp-pr-payload.json
+          mkdir -p ./temp
+          echo "$FINAL_PAYLOAD" > ./temp/temp-pr-payload.json
+          cat ./temp/temp-pr-payload.json
 
       - name: Send to ServiceNow
         run: |
@@ -74,7 +74,7 @@ jobs:
 
           RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @./temp-pr-payload.json)
+            --data @./temp/temp-pr-payload.json)
 
           BODY=$(echo "$RESPONSE" | sed '$d')
           STATUS=$(echo "$RESPONSE" | tail -n1)
