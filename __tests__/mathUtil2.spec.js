@@ -1,6 +1,4 @@
 const mathUtil = require('../src/mathUtil2');
-const grit = require('grit');
-const sinon = require('sinon');
 
 describe('mathUtil', () => {
   beforeEach(() => {
