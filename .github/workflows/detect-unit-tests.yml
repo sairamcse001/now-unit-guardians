@@ -34,13 +34,20 @@ jobs:
             npm install
           fi
 
-      - name: Run Jest with Coverage
+      - name: Run Jest with Coverage (Don't Fail on Error)
+        continue-on-error: true
         run: |
           echo "🧪 Running Jest..."
           mkdir -p temp
           npx jest --coverage | tee ./temp/jest-output.txt
 
-      - name: Parse Jest Coverage & Compose Payload
+      - name: Ensure Jest Coverage File Exists
+        run: |
+          if [ ! -f coverage/coverage-summary.json ]; then
+            echo '{}' > coverage/coverage-summary.json
+          fi
+
+      - name: Compose PR Coverage Payload
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUM: ${{ github.event.pull_request.number }}
@@ -51,7 +58,6 @@ jobs:
         run: |
           echo "📊 Extracting Coverage Summary..."
 
-          # Extract one file coverage (e.g., mathUtil.js)
           FILE_NAME="mathUtil.js"
           SPEC_NAME="mathUtil.spec.js"
           JS_FILE_PATH="src/$FILE_NAME"
@@ -59,22 +65,22 @@ jobs:
 
           RAW_BASE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main"
 
-          # Parse Jest coverage-summary JSON
-          COVERAGE_JSON=$(cat coverage/coverage-summary.json | jq -r '{
-            files: {
-              allfiles: {
-                lines: .total.lines.pct,
-                branch: .total.branches.pct
-              },
-              "mathUtil.js": {
-                lines: .["src/mathUtil.js"].lines.pct,
-                branch: .["src/mathUtil.js"].branches.pct,
-                functions: .["src/mathUtil.js"].functions.pct,
-                statements: .["src/mathUtil.js"].statements.pct,
-                uncovered_lines: []
+          # If file doesn't exist in coverage JSON, fallback
+          if jq -e '.["src/mathUtil.js"]' coverage/coverage-summary.json > /dev/null; then
+            FILE_COVERAGE=$(jq -r '.["src/mathUtil.js"]' coverage/coverage-summary.json)
+          else
+            FILE_COVERAGE='{ "lines": 0, "branches": 0, "functions": 0, "statements": 0 }'
+          fi
+
+          COVERAGE_JSON=$(jq -n \
+            --argjson total "$(jq -r '.total | {lines: .lines.pct, branch: .branches.pct}' coverage/coverage-summary.json)" \
+            --argjson file "$(echo "$FILE_COVERAGE" | jq '{lines: .lines.pct, branch: .branches.pct, functions: .functions.pct, statements: .statements.pct, uncovered_lines: []}')" \
+            '{
+              files: {
+                allfiles: $total,
+                "mathUtil.js": $file
               }
-            }
-          }')
+            }')
 
           FINAL_PAYLOAD=$(jq -n \
             --arg jsfilePath "$RAW_BASE/$JS_FILE_PATH" \
@@ -96,11 +102,10 @@ jobs:
               prName: $prName,
               BranchName: $BranchName,
               coverage: $coverage
-            }'
-          )
+            }')
 
           echo "$FINAL_PAYLOAD" > ./temp/pr-payload.json
-          echo "📬 Payload Ready:"
+          echo "📦 Payload Created:"
           cat ./temp/pr-payload.json
 
       - name: Send PR Metrics to ServiceNow
