@@ -51,8 +51,8 @@ jobs:
         run: |
           echo "📡 Sending PR data to ServiceNow..."
 
-          JS_FILE="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/src/mathUtil.js"
-          SPEC_FILE="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/__tests__/mathUtil.spec.js"
+          JS_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
+          SPEC_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
 
           FINAL_PAYLOAD=$(jq -n \
             --arg jsfilePath "$JS_FILE" \
