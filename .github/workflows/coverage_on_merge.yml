@@ -84,9 +84,7 @@ jobs:
           echo "📦 Extracting test summary..."
           OUTPUT=$(cat ./temp/jest-output.txt)
 
-          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
           echo "🧪 Extracting test results..."
@@ -113,7 +111,6 @@ jobs:
                 ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
                 [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
                 TEST_RESULTS_JSON+="${ENTRY}"
-                IS_FIRST=0
                 IN_FAILURE=0
               else
                 CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
@@ -136,21 +133,34 @@ jobs:
             echo "[]" > ./temp/coverage-table-summary.json
           fi
 
-          echo "📊 Final Structured JSON:"
-          jq -n \
-            --arg test_suites "$TEST_SUITES" \
-            --arg tests "$TESTS" \
-            --arg snapshots "$SNAPSHOTS" \
-            --arg time "$TIME" \
-            --argjson test_results "$(cat ./temp/test-results.json)" \
+      - name: Call ServiceNow Coverage API
+        env:
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          echo "📤 Preparing payload for ServiceNow..."
+
+          FINAL_PAYLOAD=$(jq -n \
+            --arg repo_name "$REPO_NAME" \
             --argjson file_coverage "$(cat ./temp/coverage-table-summary.json)" \
-            '{
-              test_summary: {
-                test_suites: $test_suites,
-                tests: $tests,
-                snapshots: $snapshots,
-                time: $time
-              },
-              test_results: $test_results,
-              file_coverage: $file_coverage
-            }'
+            '{repo_name: $repo_name, file_coverage: $file_coverage}')
+
+          echo "$FINAL_PAYLOAD" > ./temp/final-payload.json
+          echo "Payload:"
+          cat ./temp/final-payload.json
+
+          echo "📬 Sending data to ServiceNow..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/candy_content/file_coverage' \
+            --header 'Content-Type: application/json' \
+            --data @./temp/final-payload.json)
+
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          STATUS=$(echo "$RESPONSE" | tail -n1)
+
+          echo "Status Code: $STATUS"
+          echo "Response Body:"
+          echo "$BODY"
+
+          if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
+            echo "❌ Failed to POST data to ServiceNow"
+            exit 1
+          fi
