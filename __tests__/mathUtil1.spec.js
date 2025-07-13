@@ -8,3 +8,9 @@ test('Sub test', () => {
   funcs.subtract(9, 4); // no assertion
 });
 
+// __tests__/mathUtil2.spec.js
+
+test('placeholder', () => {
+  expect(true).toBe(true);
+});
+
