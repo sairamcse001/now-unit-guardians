@@ -1,14 +1,18 @@
-name: Inline Coverage and ServiceNow Notification
+name: PR Jest Coverage Report
 
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened]
     branches:
       - main
 
 jobs:
-  jest-coverage-notify:
+  pr-jest-coverage:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
 
     steps:
       - name: Checkout PR Code
@@ -16,80 +20,105 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get Changed Files
-        id: changed_files
-        run: |
-          FILES=$(git diff --name-only origin/main...HEAD)
-          echo "$FILES"
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Check for relevant file changes
-        id: should_run
-        run: |
-          echo "${{ steps.changed_files.outputs.changed_files }}" | grep -E '\.spec\.js$|\.github/workflows/.*\.ya?ml' && echo "run=true" >> $GITHUB_OUTPUT || echo "run=false" >> $GITHUB_OUTPUT
-
-      - name: Set up Node.js
-        if: steps.should_run.outputs.run == 'true'
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 20
 
-      - name: Install dependencies
-        if: steps.should_run.outputs.run == 'true'
-        run: npm install
-
-      - name: Run Jest with Coverage (ignore failures)
-        if: steps.should_run.outputs.run == 'true'
-        continue-on-error: true
+      - name: Install Dependencies
         run: |
+          echo "📦 Installing dependencies..."
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run Jest with Coverage
+        run: |
+          echo "🧪 Running Jest..."
           mkdir -p temp
-          npx jest --coverage > temp/jest-output.txt || true
+          npx jest --coverage | tee ./temp/jest-output.txt
 
-      - name: Construct and POST hardcoded payload
-        if: steps.should_run.outputs.run == 'true'
+      - name: Parse Jest Coverage & Compose Payload
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_MERGE_STATE: ${{ github.event.pull_request.draft }}
         run: |
-          JS_URL="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/src/mathUtil.js"
-          SPEC_URL="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/__tests__/mathUtil.spec.js"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          PR_LINK="${{ github.event.pull_request.html_url }}"
-          AUTHOR="${{ github.event.pull_request.user.login }}"
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          BRANCH_NAME="${{ github.event.pull_request.base.ref }}"
-          MERGE_STATUS="${{ github.event.pull_request.draft && 'Draft' || 'Ready' }}"
+          echo "📊 Extracting Coverage Summary..."
 
-          echo "🔧 Constructing JSON payload..."
+          # Extract one file coverage (e.g., mathUtil.js)
+          FILE_NAME="mathUtil.js"
+          SPEC_NAME="mathUtil.spec.js"
+          JS_FILE_PATH="src/$FILE_NAME"
+          SPEC_FILE_PATH="__tests__/$SPEC_NAME"
 
-          cat <<EOF > temp/hardcoded-payload.json
-{
-  "jsfilePath": "$JS_URL",
-  "specJsfilePath": "$SPEC_URL",
-  "prNumber": "$PR_NUMBER",
-  "prlink": "$PR_LINK",
-  "Author": "$AUTHOR",
-  "MergeStatus": "$MERGE_STATUS",
-  "prName": "$PR_TITLE",
-  "BranchName": "$BRANCH_NAME",
-  "coverage": {
-    "files": {
-      "allfiles": {
-        "lines": 83.33,
-        "branch": 100
-      },
-      "mathUtil.js": {
-        "lines": 100,
-        "branch": 100,
-        "functions": 100,
-        "statements": 100,
-        "uncovered_lines": []
-      }
-    }
-  }
-}
-EOF
+          RAW_BASE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main"
 
-          echo "📡 Sending to ServiceNow..."
-          curl --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
+          # Parse Jest coverage-summary JSON
+          COVERAGE_JSON=$(cat coverage/coverage-summary.json | jq -r '{
+            files: {
+              allfiles: {
+                lines: .total.lines.pct,
+                branch: .total.branches.pct
+              },
+              "mathUtil.js": {
+                lines: .["src/mathUtil.js"].lines.pct,
+                branch: .["src/mathUtil.js"].branches.pct,
+                functions: .["src/mathUtil.js"].functions.pct,
+                statements: .["src/mathUtil.js"].statements.pct,
+                uncovered_lines: []
+              }
+            }
+          }')
+
+          FINAL_PAYLOAD=$(jq -n \
+            --arg jsfilePath "$RAW_BASE/$JS_FILE_PATH" \
+            --arg specJsfilePath "$RAW_BASE/$SPEC_FILE_PATH" \
+            --arg prNumber "$PR_NUM" \
+            --arg prlink "$PR_URL" \
+            --arg Author "$PR_AUTHOR" \
+            --arg prName "$PR_TITLE" \
+            --arg BranchName "$PR_BRANCH" \
+            --arg MergeStatus "$([ "$PR_MERGE_STATE" == "true" ] && echo "Draft" || echo "Ready")" \
+            --argjson coverage "$COVERAGE_JSON" \
+            '{
+              jsfilePath: $jsfilePath,
+              specJsfilePath: $specJsfilePath,
+              prNumber: $prNumber,
+              prlink: $prlink,
+              Author: $Author,
+              MergeStatus: $MergeStatus,
+              prName: $prName,
+              BranchName: $BranchName,
+              coverage: $coverage
+            }'
+          )
+
+          echo "$FINAL_PAYLOAD" > ./temp/pr-payload.json
+          echo "📬 Payload Ready:"
+          cat ./temp/pr-payload.json
+
+      - name: Send PR Metrics to ServiceNow
+        run: |
+          echo "🚀 Sending PR metrics to ServiceNow..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @temp/hardcoded-payload.json
+            --data @./temp/pr-payload.json)
+
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          STATUS=$(echo "$RESPONSE" | tail -n1)
+
+          echo "Status Code: $STATUS"
+          echo "Response:"
+          echo "$BODY"
+
+          if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
+            echo "❌ Failed to POST PR metrics to ServiceNow"
+            exit 1
+          fi
