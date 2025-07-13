@@ -1,4 +1,4 @@
-name:PR Jest Coverage
+name: PR Jest Coverage
 
 on:
   pull_request:
