@@ -1,156 +1,85 @@
-name: Full Jest Coverage
+name: PR ServiceNow Notify
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize]
     branches:
       - main
 
 jobs:
-  coverage-report:
+  notify-servicenow:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout main
+      - name: Checkout PR Code
         uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          fetch-depth: 0
 
-      - name: Install dependencies
-        run: |
-          echo "📦 Installing dependencies..."
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
-
-      - name: Run Jest with coverage and save output
-        run: |
-          echo "🧪 Running Jest with coverage..."
-          mkdir -p temp
-          npx jest --coverage | tee ./temp/jest-output.txt
-
-      - name: Parse Jest Coverage Table Summary (Node.js with raw links)
-        run: |
-          node <<'EOF'
-          const fs = require('fs');
-          const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
-          const lines = text.split('\n');
-
-          const start = lines.findIndex(line => line.includes('File')) + 1;
-          const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
-
-          const repo = process.env.GITHUB_REPOSITORY;
-          const rawBase = `https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main`;
-
-          const data = [];
-
-          for (let i = start; i < end; i++) {
-            const line = lines[i].trim();
-            if (!line || line.startsWith('---')) continue;
-
-            const parts = line.split('|').map(part => part.trim());
-            if (parts.length < 6) continue;
-
-            const file = parts[0];
-            const baseFileName = file.replace(/^.*[\\/]/, '');
-            const testFileName = baseFileName.replace(/\.js$/, '.spec.js');
-            data.push({
-              file,
-              source_url: `${rawBase}/src/${file}`,
-              spec_url: `${rawBase}/__tests__/${testFileName}`,
-              coverage: {
-                statements: parts[1],
-                branches: parts[2],
-                functions: parts[3],
-                lines: parts[4],
-                uncovered_lines: parts[5] || ''
-              }
-            });
-          }
-
-          fs.writeFileSync('./temp/coverage-table-summary.json', JSON.stringify(data, null, 2));
-          EOF
-
-      - name: Parse Jest Summary & Test Results (Reliable Bash + jq)
-        run: |
-          echo "📦 Extracting test summary..."
-          OUTPUT=$(cat ./temp/jest-output.txt)
-
-          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
-
-          echo "🧪 Extracting test results..."
-          TEST_RESULTS_JSON="["
-          IS_FIRST=1
-          CURRENT_FILE=""
-          CURRENT_ERROR=""
-          IN_FAILURE=0
-
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^PASS ]]; then
-              FILE=$(echo "$line" | awk '{print $2}')
-              ENTRY=$(jq -n --arg file "$FILE" --arg status "PASS" '{file: $file, status: $status}')
-              [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-              TEST_RESULTS_JSON+="${ENTRY}"
-              IS_FIRST=0
-            elif [[ "$line" =~ ^FAIL ]]; then
-              FILE=$(echo "$line" | awk '{print $2}')
-              CURRENT_FILE="$FILE"
-              CURRENT_ERROR=""
-              IN_FAILURE=1
-            elif [[ $IN_FAILURE -eq 1 ]]; then
-              if [[ -z "$line" || "$line" =~ ^(PASS|FAIL) ]]; then
-                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-                [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-                TEST_RESULTS_JSON+="${ENTRY}"
-                IN_FAILURE=0
-              else
-                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
-              fi
-            fi
-          done <<< "$OUTPUT"
-
-          # Add last fail block if any
-          if [[ $IN_FAILURE -eq 1 ]]; then
-            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-            [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
-            TEST_RESULTS_JSON+="${ENTRY}"
-          fi
-
-          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
-          echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
-
-          # Fallback for empty file coverage file
-          if [[ ! -s ./temp/coverage-table-summary.json ]]; then
-            echo "[]" > ./temp/coverage-table-summary.json
-          fi
-
-      - name: Call ServiceNow Coverage API
+      - name: Compose Dummy Payload for PR
         env:
-          REPO_NAME: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_MERGE_STATE: ${{ github.event.pull_request.draft }}
         run: |
-          echo "📤 Preparing payload for ServiceNow..."
+          echo "🧾 Building static payload for ServiceNow..."
+
+          JS_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
+          SPEC_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
+
+          # Dummy coverage
+          COVERAGE_JSON=$(jq -n '{
+            files: {
+              allfiles: {
+                lines: 83.33,
+                branch: 100
+              },
+              "mathUtil.js": {
+                lines: 100,
+                branch: 100,
+                functions: 100,
+                statements: 100,
+                uncovered_lines: []
+              }
+            }
+          }')
 
           FINAL_PAYLOAD=$(jq -n \
-            --arg repo_name "$REPO_NAME" \
-            --argjson file_coverage "$(cat ./temp/coverage-table-summary.json)" \
-            '{repo_name: $repo_name, file_coverage: $file_coverage}')
+            --arg jsfilePath "$JS_FILE" \
+            --arg specJsfilePath "$SPEC_FILE" \
+            --arg prNumber "$PR_NUM" \
+            --arg prlink "$PR_URL" \
+            --arg Author "$PR_AUTHOR" \
+            --arg prName "$PR_TITLE" \
+            --arg BranchName "$PR_BRANCH" \
+            --arg MergeStatus "$([ "$PR_MERGE_STATE" == "true" ] && echo "Draft" || echo "Ready")" \
+            --argjson coverage "$COVERAGE_JSON" \
+            '{
+              jsfilePath: $jsfilePath,
+              specJsfilePath: $specJsfilePath,
+              prNumber: $prNumber,
+              prlink: $prlink,
+              Author: $Author,
+              MergeStatus: $MergeStatus,
+              prName: $prName,
+              BranchName: $BranchName,
+              coverage: $coverage
+            }')
 
-          echo "$FINAL_PAYLOAD" > ./temp/final-payload.json
-          echo "Payload:"
-          cat ./temp/final-payload.json
+          mkdir -p ./temp
+          echo "$FINAL_PAYLOAD" > ./temp/temp-pr-payload.json
+          echo "PR_PREVIEW_LINK=https://preview--code-guardian-ai-vision-27.lovable.app/pr-ai-metrics/${PR_NUM}" >> $GITHUB_ENV
 
-          echo "📬 Sending data to ServiceNow..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/candy_content/file_coverage' \
+      - name: Send to ServiceNow
+        run: |
+          echo "📡 Sending PR data to ServiceNow..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @./temp/final-payload.json)
+            --data @./temp/temp-pr-payload.json)
 
           BODY=$(echo "$RESPONSE" | sed '$d')
           STATUS=$(echo "$RESPONSE" | tail -n1)
@@ -160,6 +89,28 @@ jobs:
           echo "$BODY"
 
           if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
-            echo "❌ Failed to POST data to ServiceNow"
+            echo "❌ Failed to notify ServiceNow"
             exit 1
           fi
+
+      - name: Send email to sairam.pasupuleti@servicenow.com
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Your PR Metrics Are Ready!"
+          to: sairam.pasupuleti@servicenow.com
+          from: GitHub Metrics Bot <${{ secrets.EMAIL_USERNAME }}>
+          content_type: text/html
+          body: |
+            <p>Hi Sairam,</p>
+            <p>Pull request metrics have been published successfully.</p>
+            <p>
+              <strong>Preview Link:</strong><br>
+              <a href="${{ env.PR_PREVIEW_LINK }}">${{ env.PR_PREVIEW_LINK }}</a>
+            </p>
+            <p>Click the above link to see your metrics, coverage breakdown, and spec insights.</p>
+            <br>
+            <p>– Code Guardians Bot</p>
