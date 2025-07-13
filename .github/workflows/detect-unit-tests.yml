@@ -1,7 +1,7 @@
 name: PR ServiceNow Notify
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
     branches:
       - main
@@ -11,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout PR Code
+      - name: Checkout PR code (read-only)
         uses: actions/checkout@v3
         with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
 
       - name: Compose Dummy Payload for PR
@@ -27,8 +29,8 @@ jobs:
         run: |
           echo "🧾 Building static payload for ServiceNow..."
 
-          JS_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
-          SPEC_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
+          JS_FILE="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/src/mathUtil.js"
+          SPEC_FILE="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/__tests__/mathUtil.spec.js"
 
           # Dummy coverage
           COVERAGE_JSON=$(jq -n '{
