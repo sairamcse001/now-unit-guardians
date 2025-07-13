@@ -56,6 +56,7 @@ jobs:
               jsfilePath: $jsfilePath,
               specJsfilePath: $specJsfilePath,
               prNumber: $prNumber,
+              prName : $prName
               prlink: $prlink,
               Author: $Author,
               MergeStatus: $MergeStatus,
