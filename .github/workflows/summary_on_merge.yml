@@ -1,0 +1,101 @@
+name: Full Jest Coverage and Test Summary
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  coverage-report:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+      - name: Run Jest and Build Final JSON Inline
+        run: |
+          echo "🧪 Running Jest with coverage..."
+          OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
+          echo "📦 Extracting test summary..."
+          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
+          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
+          TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
+          BUILD_ERROR=false
+          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
+          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
+          echo "📦 Parsing coverage table..."
+          
+          COVERAGE_JSON_ARRAY="["
+          FIRST=1
+          in_table=false
+          while IFS= read -r line; do
+            if [[ "$line" == *"File"* && "$line" == *"% Stmts"* ]]; then
+              in_table=true
+              continue
+            fi
+            [[ "$in_table" == false || "$line" =~ ^-+$ ]] && continue
+            [[ "$line" == "" ]] && continue
+            # Skip separators and header
+            if [[ "$line" =~ ^[-|]+$ ]]; then
+              continue
+            fi
+            # Parse line
+            FIELDS=($(echo "$line" | awk -F '|' '{for(i=1;i<=NF;i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1,$2,$3,$4,$5,$6}'))
+            FILE="${FIELDS[0]}"
+            STMT="${FIELDS[1]}"
+            BRANCH="${FIELDS[2]}"
+            FUNC="${FIELDS[3]}"
+            LINE_COV="${FIELDS[4]}"
+            UNCOVERED="${FIELDS[5]}"
+            ENTRY=$(jq -n \
+              --arg file "$FILE" \
+              --arg stm "$STMT" \
+              --arg br "$BRANCH" \
+              --arg fn "$FUNC" \
+              --arg ln "$LINE_COV" \
+              --arg unc "$UNCOVERED" \
+              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}')
+            if [ $FIRST -eq 1 ]; then
+              FIRST=0
+            else
+              COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY},"
+            fi
+            COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}${ENTRY}"
+          done <<< "$(echo "$OUTPUT" | grep -E '^[^|]+ \| +[0-9]+ +\|')"
+          COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}]"
+          echo "📊 Final Structured JSON:"
+          jq -n \
+            --argjson build_error "$BUILD_ERROR" \
+            --arg test_suites "$TEST_SUITES" \
+            --arg tests "$TESTS" \
+            --arg snapshots "$SNAPSHOTS" \
+            --arg time "$TIME" \
+            --argjson test_coverage "$COVERAGE_JSON_ARRAY" \
+            '{
+              build_error: $build_error,
+              test_summary: {
+                test_suites: $test_suites,
+                tests: $tests,
+                snapshots: $snapshots,
+                time: $time
+              },
+              test_coverage: $test_coverage
+            }'
