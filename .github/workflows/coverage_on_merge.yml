@@ -1,4 +1,4 @@
-name: Full Jest Coverage with tables
+name: Full Jest Coverage
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
           mkdir -p temp
           npx jest --coverage | tee ./temp/jest-output.txt
 
-      - name: Parse Jest Coverage Table Summary to JSON (Node.js)
+      - name: Parse Jest Coverage Table Summary (Node.js with raw links)
         run: |
           node <<'EOF'
           const fs = require('fs');
@@ -47,7 +47,7 @@ jobs:
           const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
 
           const repo = process.env.GITHUB_REPOSITORY;
-          const baseUrl = `https://github.com/${repo}/blob/main`;
+          const rawBase = `https://raw.githubusercontent.com/${repo}/refs/heads/main`;
 
           const data = [];
 
@@ -64,8 +64,8 @@ jobs:
 
             data.push({
               file,
-              source_url: `${baseUrl}/src/${file}`,
-              spec_url: `${baseUrl}/__tests__/${testFileName}`,
+              source_url: `${rawBase}/src/${file}`,
+              spec_url: `${rawBase}/__tests__/${testFileName}`,
               coverage: {
                 statements: parts[1],
                 branches: parts[2],
@@ -79,16 +79,17 @@ jobs:
           fs.writeFileSync('./temp/coverage-table-summary.json', JSON.stringify(data, null, 2));
           EOF
 
-      - name: Parse Jest Summary and Errors (Bash + jq)
+      - name: Parse Jest Summary & Test Results (Reliable Bash + jq)
         run: |
-          echo "📦 Extracting summary and errors..."
           OUTPUT=$(cat ./temp/jest-output.txt)
 
+          echo "📦 Extracting test summary..."
           TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
+          echo "🧪 Extracting test results..."
           TEST_RESULTS_JSON="["
           IS_FIRST=1
           CURRENT_FILE=""
@@ -136,10 +137,9 @@ jobs:
             TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
           fi
 
-          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
           echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
 
-          echo "📊 Generating Final Structured JSON:"
+          echo "📊 Final Structured JSON:"
           jq -n \
             --arg test_suites "$TEST_SUITES" \
             --arg tests "$TESTS" \
