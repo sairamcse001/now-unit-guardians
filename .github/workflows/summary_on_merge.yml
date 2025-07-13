@@ -1,4 +1,4 @@
-name: Full Jest Coverage 
+name: Full Jest Coverage
 
 on:
   push:
@@ -29,73 +29,82 @@ jobs:
           else
             npm install
           fi
-      - name: Run Jest and Build Final JSON Inline
+
+      - name: Run Jest and Parse Output to JSON
         run: |
           echo "🧪 Running Jest with coverage..."
           OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
-          echo "📦 Extracting test summary..."
+
+          echo "📦 Extracting summary..."
           TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
-          BUILD_ERROR=false
-          echo "$TEST_SUITES" | grep -q "failed" && BUILD_ERROR=true
-          echo "$TESTS" | grep -q "failed" && BUILD_ERROR=true
-          echo "📦 Parsing coverage table..."
-          
-          COVERAGE_JSON_ARRAY="["
-          FIRST=1
-          in_table=false
+
+          echo "🧪 Extracting pass/fail and errors..."
+          TEST_RESULTS_JSON="["
+          IS_FIRST=1
+          CURRENT_FILE=""
+          CURRENT_ERROR=""
+          IN_FAILURE=0
+
           while IFS= read -r line; do
-            if [[ "$line" == *"File"* && "$line" == *"% Stmts"* ]]; then
-              in_table=true
-              continue
+            if [[ "$line" =~ ^PASS ]]; then
+              FILE=$(echo "$line" | awk '{print $2}')
+              ENTRY=$(jq -n --arg file "$FILE" --arg status "PASS" '{file: $file, status: $status}')
+              if [[ $IS_FIRST -eq 1 ]]; then
+                IS_FIRST=0
+              else
+                TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
+              fi
+              TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+            elif [[ "$line" =~ ^FAIL ]]; then
+              FILE=$(echo "$line" | awk '{print $2}')
+              CURRENT_FILE="$FILE"
+              CURRENT_ERROR=""
+              IN_FAILURE=1
+            elif [[ $IN_FAILURE -eq 1 ]]; then
+              if [[ "$line" == "" || "$line" =~ ^PASS || "$line" =~ ^FAIL ]]; then
+                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+                if [[ $IS_FIRST -eq 1 ]]; then
+                  IS_FIRST=0
+                else
+                  TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
+                fi
+                TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+                IN_FAILURE=0
+              else
+                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
+              fi
             fi
-            [[ "$in_table" == false || "$line" =~ ^-+$ ]] && continue
-            [[ "$line" == "" ]] && continue
-            # Skip separators and header
-            if [[ "$line" =~ ^[-|]+$ ]]; then
-              continue
-            fi
-            # Parse line
-            FIELDS=($(echo "$line" | awk -F '|' '{for(i=1;i<=NF;i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1,$2,$3,$4,$5,$6}'))
-            FILE="${FIELDS[0]}"
-            STMT="${FIELDS[1]}"
-            BRANCH="${FIELDS[2]}"
-            FUNC="${FIELDS[3]}"
-            LINE_COV="${FIELDS[4]}"
-            UNCOVERED="${FIELDS[5]}"
-            ENTRY=$(jq -n \
-              --arg file "$FILE" \
-              --arg stm "$STMT" \
-              --arg br "$BRANCH" \
-              --arg fn "$FUNC" \
-              --arg ln "$LINE_COV" \
-              --arg unc "$UNCOVERED" \
-              '{file: $file, statements: $stm, branches: $br, functions: $fn, lines: $ln, uncovered_lines: $unc}')
-            if [ $FIRST -eq 1 ]; then
-              FIRST=0
+          done <<< "$OUTPUT"
+
+          # Capture last error block if script ends on a FAIL
+          if [[ $IN_FAILURE -eq 1 ]]; then
+            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
+            if [[ $IS_FIRST -eq 1 ]]; then
+              IS_FIRST=0
             else
-              COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY},"
+              TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
             fi
-            COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}${ENTRY}"
-          done <<< "$(echo "$OUTPUT" | grep -E '^[^|]+ \| +[0-9]+ +\|')"
-          COVERAGE_JSON_ARRAY="${COVERAGE_JSON_ARRAY}]"
+            TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+          fi
+
+          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
+
           echo "📊 Final Structured JSON:"
           jq -n \
-            --argjson build_error "$BUILD_ERROR" \
             --arg test_suites "$TEST_SUITES" \
             --arg tests "$TESTS" \
             --arg snapshots "$SNAPSHOTS" \
             --arg time "$TIME" \
-            --argjson test_coverage "$COVERAGE_JSON_ARRAY" \
+            --argjson test_results "$TEST_RESULTS_JSON" \
             '{
-              build_error: $build_error,
               test_summary: {
                 test_suites: $test_suites,
                 tests: $tests,
                 snapshots: $snapshots,
                 time: $time
               },
-              test_coverage: $test_coverage
+              test_results: $test_results
             }'
