@@ -1,127 +1,129 @@
-name: PR ServiceNow Notify
+name: PR Coverage and Notify ServiceNow (Fixed JS Paths)
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, reopened, synchronize]
     branches:
       - main
 
 jobs:
-  notify-servicenow:
+  pr-coverage-post:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout PR Code
+      - name: Checkout Code
         uses: actions/checkout@v3
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Install dependencies
-        run: npm ci
-
-      - name: Run Jest and Collect Coverage
         run: |
-          npx jest --coverage --silent || true
-          mkdir -p ./temp
-          cp coverage/coverage-summary.json ./temp/
+          npm ci || npm install
 
-      - name: Extract Jest Coverage Summary
-        id: extract
-        run: |
-          SUMMARY=$(cat ./temp/coverage-summary.json)
-          echo "$SUMMARY" | jq . > /dev/null || { echo "❌ Invalid JSON"; exit 1; }
-
-          LINES=$(echo "$SUMMARY" | jq -r '.total.lines.pct')
-          BRANCHES=$(echo "$SUMMARY" | jq -r '.total.branches.pct')
-          FUNCTIONS=$(echo "$SUMMARY" | jq -r '.total.functions.pct')
-          STATEMENTS=$(echo "$SUMMARY" | jq -r '.total.statements.pct')
-
-          echo "LINES=$LINES" >> $GITHUB_ENV
-          echo "BRANCHES=$BRANCHES" >> $GITHUB_ENV
-          echo "FUNCTIONS=$FUNCTIONS" >> $GITHUB_ENV
-          echo "STATEMENTS=$STATEMENTS" >> $GITHUB_ENV
-
-          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-          echo "PR_LINK=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
-          echo "AUTHOR=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
-          echo "PR_TITLE=${{ github.event.pull_request.title }}" >> $GITHUB_ENV
-          echo "BRANCH_NAME=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
-          echo "MERGE_STATUS=$([ "${{ github.event.pull_request.draft }}" == "true" ] && echo "Draft" || echo "Ready")" >> $GITHUB_ENV
-          echo "JS_URL=https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js" >> $GITHUB_ENV
-          echo "SPEC_URL=https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js" >> $GITHUB_ENV
-          echo "PR_PREVIEW_LINK=https://preview--code-guardian-ai-vision-27.lovable.app/pr-ai-metrics/${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-
-      - name: Construct Hardcoded Payload JSON
+      - name: Run Jest with coverage
+        continue-on-error: true
         run: |
           mkdir -p temp
-          cat <<EOF > temp/hardcoded-payload.json
-{
-  "jsfilePath": "${JS_URL}",
-  "specJsfilePath": "${SPEC_URL}",
-  "prNumber": "${PR_NUMBER}",
-  "prlink": "${PR_LINK}",
-  "Author": "${AUTHOR}",
-  "MergeStatus": "${MERGE_STATUS}",
-  "prName": "${PR_TITLE}",
-  "BranchName": "${BRANCH_NAME}",
-  "coverage": {
-    "files": {
-      "allfiles": {
-        "lines": ${LINES},
-        "branches": ${BRANCHES}
-      },
-      "mathUtil.js": {
-        "lines": ${LINES},
-        "branches": ${BRANCHES},
-        "functions": ${FUNCTIONS},
-        "statements": ${STATEMENTS},
-        "uncovered_lines": []
-      }
-    }
-  }
-}
-EOF
+          npx jest --coverage | tee ./temp/jest-output.txt
 
-          cat temp/hardcoded-payload.json
-
-      - name: Send to ServiceNow
+      - name: Parse Coverage JSON
         run: |
-          echo "📡 Sending PR data to ServiceNow..."
-
-          RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
-            --header 'Content-Type: application/json' \
-            --data @temp/hardcoded-payload.json)
-
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          STATUS=$(echo "$RESPONSE" | tail -n1)
-
-          echo "Status Code: $STATUS"
-          echo "Response Body:"
-          echo "$BODY"
-
-          if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
-            echo "❌ Failed to notify ServiceNow"
-            exit 1
+          COVERAGE_FILE="coverage/coverage-summary.json"
+          if [[ ! -f "$COVERAGE_FILE" ]]; then
+            echo "⚠️ coverage-summary.json not found. Creating fallback..."
+            echo '{}' > "$COVERAGE_FILE"
           fi
 
-      - name: Comment on PR using GitHub API
+          jq '.' "$COVERAGE_FILE"
+
+          # Parse metrics with fallback to 0 if not found
+          ALL_LINES=$(jq '.total.lines.pct // 0' "$COVERAGE_FILE")
+          ALL_BRANCHES=$(jq '.total.branches.pct // 0' "$COVERAGE_FILE")
+          MATHUTIL_LINES=$(jq '.["src/mathUtil.js"].lines.pct // 0' "$COVERAGE_FILE")
+          MATHUTIL_BRANCHES=$(jq '.["src/mathUtil.js"].branches.pct // 0' "$COVERAGE_FILE")
+          MATHUTIL_FUNCTIONS=$(jq '.["src/mathUtil.js"].functions.pct // 0' "$COVERAGE_FILE")
+          MATHUTIL_STATEMENTS=$(jq '.["src/mathUtil.js"].statements.pct // 0' "$COVERAGE_FILE")
+
+          echo "$ALL_LINES" > temp/all_lines.txt
+          echo "$ALL_BRANCHES" > temp/all_branches.txt
+          echo "$MATHUTIL_LINES" > temp/mathutil_lines.txt
+          echo "$MATHUTIL_BRANCHES" > temp/mathutil_branches.txt
+          echo "$MATHUTIL_FUNCTIONS" > temp/mathutil_functions.txt
+          echo "$MATHUTIL_STATEMENTS" > temp/mathutil_statements.txt
+
+      - name: Construct and Send Payload to ServiceNow
         env:
-          GH_TOKEN: ${{ secrets.GH_COMMENT_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BRANCH: ${{ github.event.pull_request.base.ref }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
-          COMMENT="✅ **PR Metrics Preview**
-🔗 [Click here to view full metrics](${PR_PREVIEW_LINK})
+          echo "📦 Constructing final payload..."
 
-**📊 Jest Coverage Summary**
-| Metric     | Percentage |
-|------------|------------|
-| 🧪 Lines    | ${LINES}% |
-| 🌿 Branches | ${BRANCHES}% |
-| 🔧 Functions | ${FUNCTIONS}% |
-| 📦 Statements | ${STATEMENTS}% |"
+          JS_PATH="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
+          SPEC_PATH="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
 
-          curl -s -X POST "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            -H "Authorization: token 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" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg body "$COMMENT" '{body: $body}')"
+          MERGE_STATUS=$(if [[ "$IS_DRAFT" == "true" ]]; then echo "Draft"; else echo "Ready"; fi)
+
+          ALL_LINES=$(cat temp/all_lines.txt)
+          ALL_BRANCHES=$(cat temp/all_branches.txt)
+          MATHUTIL_LINES=$(cat temp/mathutil_lines.txt)
+          MATHUTIL_BRANCHES=$(cat temp/mathutil_branches.txt)
+          MATHUTIL_FUNCTIONS=$(cat temp/mathutil_functions.txt)
+          MATHUTIL_STATEMENTS=$(cat temp/mathutil_statements.txt)
+
+          jq -n \
+            --arg jsfilePath "$JS_PATH" \
+            --arg specJsfilePath "$SPEC_PATH" \
+            --arg prNumber "$PR_NUMBER" \
+            --arg prlink "$PR_URL" \
+            --arg Author "$AUTHOR" \
+            --arg MergeStatus "$MERGE_STATUS" \
+            --arg prName "$PR_TITLE" \
+            --arg BranchName "$BRANCH" \
+            --argjson lines "$MATHUTIL_LINES" \
+            --argjson branch "$MATHUTIL_BRANCHES" \
+            --argjson functions "$MATHUTIL_FUNCTIONS" \
+            --argjson statements "$MATHUTIL_STATEMENTS" \
+            --argjson all_lines "$ALL_LINES" \
+            --argjson all_branch "$ALL_BRANCHES" \
+            '{
+              jsfilePath: $jsfilePath,
+              specJsfilePath: $specJsfilePath,
+              prNumber: $prNumber,
+              prlink: $prlink,
+              Author: $Author,
+              MergeStatus: $MergeStatus,
+              prName: $prName,
+              BranchName: $BranchName,
+              coverage: {
+                files: {
+                  allfiles: {
+                    lines: $all_lines,
+                    branch: $all_branch
+                  },
+                  "mathUtil.js": {
+                    lines: $lines,
+                    branch: $branch,
+                    functions: $functions,
+                    statements: $statements,
+                    uncovered_lines: []
+                  }
+                }
+              }
+            }' > temp/hardcoded-payload.json
+
+          echo "✅ Final Payload:"
+          cat temp/hardcoded-payload.json
+
+          echo "📬 Sending to ServiceNow..."
+          curl --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
+            --header 'Content-Type: application/json' \
+            --data @temp/hardcoded-payload.json
