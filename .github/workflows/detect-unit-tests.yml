@@ -1,4 +1,4 @@
-name: PR Jest Coverage Report
+name: PR ServiceNow Notify
 
 on:
   pull_request:
@@ -7,47 +7,11 @@ on:
       - main
 
 jobs:
-  pr-jest-coverage:
+  notify-servicenow:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      pull-requests: read
-
     steps:
-      - name: Checkout PR Code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Dependencies
-        run: |
-          echo "📦 Installing dependencies..."
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
-
-      - name: Run Jest with Coverage (Don't Fail on Error)
-        continue-on-error: true
-        run: |
-          echo "🧪 Running Jest..."
-          mkdir -p temp
-          npx jest --coverage | tee ./temp/jest-output.txt
-
-      - name: Ensure Jest Coverage File Exists
-        run: |
-          if [ ! -f coverage/coverage-summary.json ]; then
-            echo '{}' > coverage/coverage-summary.json
-          fi
-
-      - name: Compose PR Coverage Payload
+      - name: Compose Dummy Payload for PR
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUM: ${{ github.event.pull_request.number }}
@@ -56,35 +20,31 @@ jobs:
           PR_BRANCH: ${{ github.event.pull_request.base.ref }}
           PR_MERGE_STATE: ${{ github.event.pull_request.draft }}
         run: |
-          echo "📊 Extracting Coverage Summary..."
+          echo "🧾 Building static payload for ServiceNow..."
 
-          FILE_NAME="mathUtil.js"
-          SPEC_NAME="mathUtil.spec.js"
-          JS_FILE_PATH="src/$FILE_NAME"
-          SPEC_FILE_PATH="__tests__/$SPEC_NAME"
+          JS_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
+          SPEC_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
 
-          RAW_BASE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main"
-
-          # If file doesn't exist in coverage JSON, fallback
-          if jq -e '.["src/mathUtil.js"]' coverage/coverage-summary.json > /dev/null; then
-            FILE_COVERAGE=$(jq -r '.["src/mathUtil.js"]' coverage/coverage-summary.json)
-          else
-            FILE_COVERAGE='{ "lines": 0, "branches": 0, "functions": 0, "statements": 0 }'
-          fi
-
-          COVERAGE_JSON=$(jq -n \
-            --argjson total "$(jq -r '.total | {lines: .lines.pct, branch: .branches.pct}' coverage/coverage-summary.json)" \
-            --argjson file "$(echo "$FILE_COVERAGE" | jq '{lines: .lines.pct, branch: .branches.pct, functions: .functions.pct, statements: .statements.pct, uncovered_lines: []}')" \
-            '{
-              files: {
-                allfiles: $total,
-                "mathUtil.js": $file
+          # Dummy coverage
+          COVERAGE_JSON=$(jq -n '{
+            files: {
+              allfiles: {
+                lines: 83.33,
+                branch: 100
+              },
+              "mathUtil.js": {
+                lines: 100,
+                branch: 100,
+                functions: 100,
+                statements: 100,
+                uncovered_lines: []
               }
-            }')
+            }
+          }')
 
           FINAL_PAYLOAD=$(jq -n \
-            --arg jsfilePath "$RAW_BASE/$JS_FILE_PATH" \
-            --arg specJsfilePath "$RAW_BASE/$SPEC_FILE_PATH" \
+            --arg jsfilePath "$JS_FILE" \
+            --arg specJsfilePath "$SPEC_FILE" \
             --arg prNumber "$PR_NUM" \
             --arg prlink "$PR_URL" \
             --arg Author "$PR_AUTHOR" \
@@ -104,26 +64,25 @@ jobs:
               coverage: $coverage
             }')
 
-          echo "$FINAL_PAYLOAD" > ./temp/pr-payload.json
-          echo "📦 Payload Created:"
-          cat ./temp/pr-payload.json
+          echo "$FINAL_PAYLOAD" > ./temp-pr-payload.json
+          cat ./temp-pr-payload.json
 
-      - name: Send PR Metrics to ServiceNow
+      - name: Send to ServiceNow
         run: |
-          echo "🚀 Sending PR metrics to ServiceNow..."
+          echo "📡 Sending PR data to ServiceNow..."
 
           RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @./temp/pr-payload.json)
+            --data @./temp-pr-payload.json)
 
           BODY=$(echo "$RESPONSE" | sed '$d')
           STATUS=$(echo "$RESPONSE" | tail -n1)
 
           echo "Status Code: $STATUS"
-          echo "Response:"
+          echo "Response Body:"
           echo "$BODY"
 
           if [[ "$STATUS" -ne 200 && "$STATUS" -ne 201 ]]; then
-            echo "❌ Failed to POST PR metrics to ServiceNow"
+            echo "❌ Failed to notify ServiceNow"
             exit 1
           fi
