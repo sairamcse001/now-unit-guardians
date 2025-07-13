@@ -30,79 +30,16 @@ jobs:
             npm install
           fi
 
-      - name: Run Jest and Parse Output to JSON
+      - name: Run Jest, Parse Results, and POST to ServiceNow
         run: |
           echo "🧪 Running Jest with coverage..."
           OUTPUT=$(npx jest --coverage 2>&1 | tee /dev/stderr)
 
-          echo "📦 Extracting summary..."
-          TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
+          echo "📊 Extracting summary..."
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
-          SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          echo "📊 Extracting file coverage..."
-          REPO_URL="https://github.com/${{ github.repository }}/blob/main"
-
-          # Skip dashed lines and table header
-          COVERAGE_LINES=$(echo "$OUTPUT" | awk '
-            /^\s*-{10}/ {dashes++}
-            dashes == 1 {next}
-            dashes == 2 {exit}
-            dashes == 1 {print}
-          ')
-
-          FILE_COVERAGE_JSON="["
-          IS_FIRST_COV=1
-          while read -r line; do
-            FILE=$(echo "$line" | awk '{print $1}')
-            if [[ "$FILE" == "All" || "$FILE" == "" ]]; then
-              continue
-            fi
-
-            STMT=$(echo "$line" | awk '{print $2}')
-            BRANCH=$(echo "$line" | awk '{print $3}')
-            FUNC=$(echo "$line" | awk '{print $4}')
-            LINE_COV=$(echo "$line" | awk '{print $5}')
-            UNCOV=$(echo "$line" | cut -d'|' -f6- | sed 's/^[[:space:]]*//')
-
-            RAW_SRC_URL="${REPO_URL}/src/${FILE}"
-            SPEC_NAME="$(basename "$FILE" .js).spec.js"
-            RAW_SPEC_URL="${REPO_URL}/__tests__/${SPEC_NAME}"
-
-            ENTRY=$(jq -n \
-              --arg file "$FILE" \
-              --arg src_url "$RAW_SRC_URL" \
-              --arg spec_url "$RAW_SPEC_URL" \
-              --arg stmt "$STMT" \
-              --arg branch "$BRANCH" \
-              --arg func "$FUNC" \
-              --arg line "$LINE_COV" \
-              --arg uncovered "$UNCOV" \
-              '{
-                file: $file,
-                source_url: $src_url,
-                spec_url: $spec_url,
-                coverage: {
-                  statements: $stmt,
-                  branches: $branch,
-                  functions: $func,
-                  lines: $line,
-                  uncovered_lines: $uncovered
-                }
-              }')
-
-            if [[ $IS_FIRST_COV -eq 1 ]]; then
-              IS_FIRST_COV=0
-            else
-              FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON},"
-            fi
-            FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON}${ENTRY}"
-          done <<< "$COVERAGE_LINES"
-
-          FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON}]"
-
-          echo "🧪 Extracting pass/fail and errors..."
+          echo "🧪 Extracting test results..."
           TEST_RESULTS_JSON="["
           IS_FIRST=1
           CURRENT_FILE=""
@@ -152,21 +89,30 @@ jobs:
 
           TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
 
-          echo "📊 Final Structured JSON:"
-          jq -n \
-            --arg test_suites "$TEST_SUITES" \
+          echo "🛠️ Building JSON payload..."
+          FINAL_JSON=$(jq -n \
+            --arg repo_name "now-unit-guardians" \
             --arg tests "$TESTS" \
-            --arg snapshots "$SNAPSHOTS" \
             --arg time "$TIME" \
             --argjson test_results "$TEST_RESULTS_JSON" \
-            --argjson file_coverage "$FILE_COVERAGE_JSON" \
             '{
+              repo_name: $repo_name,
               test_summary: {
-                test_suites: $test_suites,
                 tests: $tests,
-                snapshots: $snapshots,
                 time: $time
               },
-              test_results: $test_results,
-              file_coverage: $file_coverage
-            }'
+              test_results: $test_results
+            }')
+
+          echo "$FINAL_JSON" > payload.json
+          cat payload.json
+
+          echo "📡 Sending to ServiceNow API..."
+          RESPONSE=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" --output response.txt --location 'https://hackai.service-now.com/api/snc/candy_content/test_summary' \
+            --header 'Content-Type: application/json' \
+            --data @payload.json)
+
+          HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+          echo "✅ HTTP Status: $HTTP_STATUS"
+          echo "📨 API Response:"
+          cat response.txt
