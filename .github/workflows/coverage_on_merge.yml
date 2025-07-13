@@ -81,9 +81,9 @@ jobs:
 
       - name: Parse Jest Summary & Test Results (Reliable Bash + jq)
         run: |
+          echo "📦 Extracting test summary..."
           OUTPUT=$(cat ./temp/jest-output.txt)
 
-          echo "📦 Extracting test summary..."
           TEST_SUITES=$(echo "$OUTPUT" | grep "^Test Suites:" | sed 's/^Test Suites:[[:space:]]*//')
           TESTS=$(echo "$OUTPUT" | grep "^Tests:" | sed 's/^Tests:[[:space:]]*//')
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
@@ -100,26 +100,20 @@ jobs:
             if [[ "$line" =~ ^PASS ]]; then
               FILE=$(echo "$line" | awk '{print $2}')
               ENTRY=$(jq -n --arg file "$FILE" --arg status "PASS" '{file: $file, status: $status}')
-              if [[ $IS_FIRST -eq 1 ]]; then
-                IS_FIRST=0
-              else
-                TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
-              fi
-              TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+              [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
+              TEST_RESULTS_JSON+="${ENTRY}"
+              IS_FIRST=0
             elif [[ "$line" =~ ^FAIL ]]; then
               FILE=$(echo "$line" | awk '{print $2}')
               CURRENT_FILE="$FILE"
               CURRENT_ERROR=""
               IN_FAILURE=1
             elif [[ $IN_FAILURE -eq 1 ]]; then
-              if [[ "$line" == "" || "$line" =~ ^PASS || "$line" =~ ^FAIL ]]; then
+              if [[ -z "$line" || "$line" =~ ^(PASS|FAIL) ]]; then
                 ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-                if [[ $IS_FIRST -eq 1 ]]; then
-                  IS_FIRST=0
-                else
-                  TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
-                fi
-                TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+                [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
+                TEST_RESULTS_JSON+="${ENTRY}"
+                IS_FIRST=0
                 IN_FAILURE=0
               else
                 CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
@@ -127,17 +121,20 @@ jobs:
             fi
           done <<< "$OUTPUT"
 
+          # Add last fail block if any
           if [[ $IN_FAILURE -eq 1 ]]; then
             ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
-            if [[ $IS_FIRST -eq 1 ]]; then
-              IS_FIRST=0
-            else
-              TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
-            fi
-            TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+            [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
+            TEST_RESULTS_JSON+="${ENTRY}"
           fi
 
+          TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
           echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
+
+          # Fallback for empty file coverage file
+          if [[ ! -s ./temp/coverage-table-summary.json ]]; then
+            echo "[]" > ./temp/coverage-table-summary.json
+          fi
 
           echo "📊 Final Structured JSON:"
           jq -n \
