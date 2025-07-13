@@ -57,7 +57,7 @@ jobs:
           AUTHOR="${{ github.event.pull_request.user.login }}"
           PR_TITLE="${{ github.event.pull_request.title }}"
           BRANCH_NAME="${{ github.event.pull_request.base.ref }}"
-          MERGE_STATUS=$(if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then echo "Draft"; else echo "Ready"; fi)
+          MERGE_STATUS="${{ github.event.pull_request.draft && 'Draft' || 'Ready' }}"
 
           echo "🔧 Constructing JSON payload..."
 
