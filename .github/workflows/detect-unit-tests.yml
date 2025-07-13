@@ -108,30 +108,33 @@ jobs:
             JS_FILE="https://raw.githubusercontent.com/$OWNER/$REPO_NAME/refs/heads/$BRANCH_NAME/src/$JS_NAME"
           done
 
-          SUMMARY=$(cat coverage/coverage-summary.json | jq -c '.')
+          SUMMARY=$(cat coverage/coverage-summary.json)
+          LINES_PCT=$(echo "$SUMMARY" | jq '.total.lines.pct')
+          BRANCH_PCT=$(echo "$SUMMARY" | jq '.total.branches.pct')
+          FILE_COVERAGE=$(echo "$SUMMARY" | jq '.["mathUtil.js"]')
 
-          PAYLOAD=$(cat <<EOF
-{
-  "jsfilePath": "$JS_FILE",
-  "specJsfilePath": "$SPEC_FILE",
-  "prNumber": "$PR_NUMBER",
-  "prlink": "$PR_LINK",
-  "Author": "$PR_AUTHOR",
-  "MergeStatus": "$MERGE_STATE",
-  "prName": "$PR_TITLE",
-  "BranchName": "$BRANCH_NAME",
-  "coverage": {
-    "files": {
-      "allfiles": {
-        "lines": $(echo $SUMMARY | jq '.total.lines.pct'),
-        "branch": $(echo $SUMMARY | jq '.total.branches.pct')
-      },
-      "mathUtil.js": $(echo $SUMMARY | jq '.["mathUtil.js"]')
-    }
-  }
-}
-EOF
-)
+          PAYLOAD=$(echo '{}' | jq --arg jsfile "$JS_FILE" \
+                                   --arg specfile "$SPEC_FILE" \
+                                   --arg prnum "$PR_NUMBER" \
+                                   --arg prlink "$PR_LINK" \
+                                   --arg author "$PR_AUTHOR" \
+                                   --arg merge "$MERGE_STATE" \
+                                   --arg prname "$PR_TITLE" \
+                                   --arg branch "$BRANCH_NAME" \
+                                   --argjson lines "$LINES_PCT" \
+                                   --argjson branches "$BRANCH_PCT" \
+                                   --argjson filecov "$FILE_COVERAGE" \
+            '.jsfilePath = $jsfile |
+             .specJsfilePath = $specfile |
+             .prNumber = $prnum |
+             .prlink = $prlink |
+             .Author = $author |
+             .MergeStatus = $merge |
+             .prName = $prname |
+             .BranchName = $branch |
+             .coverage.files.allfiles.lines = $lines |
+             .coverage.files.allfiles.branch = $branches |
+             .coverage.files["mathUtil.js"] = $filecov')
 
           echo "$PAYLOAD"
 
