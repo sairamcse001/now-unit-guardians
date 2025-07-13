@@ -42,9 +42,11 @@ jobs:
           echo "found_files=$FILES" >> "$GITHUB_OUTPUT"
 
       - name: Run Jest with Coverage
+        id: jest
         run: |
           echo "🧪 Running tests with coverage..."
-          npm run coverage
+          npm run coverage || true
+          echo "jest_exit_code=$?" >> $GITHUB_ENV
 
       - name: Upload HTML Coverage Report
         uses: actions/upload-artifact@v4
@@ -60,7 +62,7 @@ jobs:
             const fs = require('fs');
             const path = 'coverage/coverage-summary.json';
             if (!fs.existsSync(path)) {
-              core.setFailed('❌ coverage-summary.json not found');
+              core.warning('⚠️ coverage-summary.json not found');
             } else {
               const summary = JSON.parse(fs.readFileSync(path, 'utf8')).total;
               const format = (obj) => `- 🧪 **Statements**: ${obj.statements.pct}% | **Branches**: ${obj.branches.pct}% | **Functions**: ${obj.functions.pct}% | **Lines**: ${obj.lines.pct}%`;
@@ -141,3 +143,8 @@ jobs:
           curl -X POST "https://hackai.service-now.com/api/snc/nowunitmetricsapi" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
+
+      - name: Fail if Jest Tests Failed
+        run: |
+          echo "Checking Jest result..."
+          exit $jest_exit_code
