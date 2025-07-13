@@ -1,4 +1,4 @@
-name: Inline Coverage on PR Open/Reopen
+name: Inline Coverage and ServiceNow Notification
 
 on:
   pull_request:
@@ -7,15 +7,17 @@ on:
       - main
 
 jobs:
-  run-inline-coverage:
+  jest-coverage-notify:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout PR Code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Get Changed Files
-        id: changed
+        id: changed_files
         run: |
           FILES=$(git diff --name-only origin/main...HEAD)
           echo "$FILES"
@@ -23,12 +25,29 @@ jobs:
           echo "$FILES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Should Run Coverage?
+      - name: Check for relevant file changes
         id: should_run
         run: |
-          echo "${{ steps.changed.outputs.changed_files }}" | grep -E '\.spec\.js$|\.github/workflows/.*\.ya?ml' && echo "run=true" >> $GITHUB_OUTPUT || echo "run=false" >> $GITHUB_OUTPUT
+          echo "${{ steps.changed_files.outputs.changed_files }}" | grep -E '\.spec\.js$|\.github/workflows/.*\.ya?ml' && echo "run=true" >> $GITHUB_OUTPUT || echo "run=false" >> $GITHUB_OUTPUT
 
-      - name: Construct Inline Payload and Send to ServiceNow
+      - name: Set up Node.js
+        if: steps.should_run.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        if: steps.should_run.outputs.run == 'true'
+        run: npm install
+
+      - name: Run Jest with Coverage (ignore failures)
+        if: steps.should_run.outputs.run == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p temp
+          npx jest --coverage > temp/jest-output.txt || true
+
+      - name: Construct and POST hardcoded payload
         if: steps.should_run.outputs.run == 'true'
         run: |
           JS_URL="https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/main/src/mathUtil.js"
@@ -38,9 +57,11 @@ jobs:
           AUTHOR="${{ github.event.pull_request.user.login }}"
           PR_TITLE="${{ github.event.pull_request.title }}"
           BRANCH_NAME="${{ github.event.pull_request.base.ref }}"
-          MERGE_STATUS=$(if ${{ github.event.pull_request.draft }}; then echo "Draft"; else echo "Ready"; fi)
+          MERGE_STATUS=$(if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then echo "Draft"; else echo "Ready"; fi)
 
-          cat <<EOF > temp/inline-payload.json
+          echo "🔧 Constructing JSON payload..."
+
+          cat <<EOF > temp/hardcoded-payload.json
 {
   "jsfilePath": "$JS_URL",
   "specJsfilePath": "$SPEC_URL",
@@ -68,7 +89,7 @@ jobs:
 }
 EOF
 
-          echo "📡 Sending inline payload to ServiceNow..."
+          echo "📡 Sending to ServiceNow..."
           curl --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @temp/inline-payload.json
+            --data @temp/hardcoded-payload.json
