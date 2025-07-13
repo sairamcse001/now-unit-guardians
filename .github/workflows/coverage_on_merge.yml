@@ -59,8 +59,15 @@ jobs:
             if (parts.length < 6 || parts[0] === 'All files') continue;
 
             const file = parts[0];
+            if (file === 'All files')
+            {
+                  const baseFileName = '';
+                  const testFileName = '';
+            }
+            else{
             const baseFileName = file.replace(/^.*[\\/]/, '');
             const testFileName = baseFileName.replace(/\.js$/, '.spec.js');
+            }
 
             data.push({
               file,
