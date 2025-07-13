@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout PR code
+      - name: Checkout PR Code
         uses: actions/checkout@v3
         with:
           ref: ${{ github.event.pull_request.head.ref }}
@@ -19,20 +19,17 @@ jobs:
           fetch-depth: 0
 
       - name: Install dependencies
-        run: |
-          npm ci
+        run: npm ci
 
-      - name: Run Jest and collect coverage
+      - name: Run Jest and Collect Coverage
         run: |
           npx jest --coverage --silent || true
           mkdir -p ./temp
           cp coverage/coverage-summary.json ./temp/
 
-      - name: Extract Jest coverage summary
+      - name: Extract Jest Coverage Summary
         id: extract
         run: |
-          echo "📊 Extracting Jest coverage summary..."
-
           SUMMARY=$(cat ./temp/coverage-summary.json)
           echo "$SUMMARY" | jq . > /dev/null || { echo "❌ Invalid JSON"; exit 1; }
 
@@ -45,42 +42,57 @@ jobs:
           echo "BRANCHES=$BRANCHES" >> $GITHUB_ENV
           echo "FUNCTIONS=$FUNCTIONS" >> $GITHUB_ENV
           echo "STATEMENTS=$STATEMENTS" >> $GITHUB_ENV
+
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          echo "PR_LINK=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
+          echo "AUTHOR=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
+          echo "PR_TITLE=${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+          echo "BRANCH_NAME=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
+          echo "MERGE_STATUS=$([ "${{ github.event.pull_request.draft }}" == "true" ] && echo "Draft" || echo "Ready")" >> $GITHUB_ENV
+          echo "JS_URL=https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js" >> $GITHUB_ENV
+          echo "SPEC_URL=https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js" >> $GITHUB_ENV
           echo "PR_PREVIEW_LINK=https://preview--code-guardian-ai-vision-27.lovable.app/pr-ai-metrics/${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
+      - name: Construct Hardcoded Payload JSON
+        run: |
+          mkdir -p temp
+          cat <<EOF > temp/hardcoded-payload.json
+{
+  "jsfilePath": "${JS_URL}",
+  "specJsfilePath": "${SPEC_URL}",
+  "prNumber": "${PR_NUMBER}",
+  "prlink": "${PR_LINK}",
+  "Author": "${AUTHOR}",
+  "MergeStatus": "${MERGE_STATUS}",
+  "prName": "${PR_TITLE}",
+  "BranchName": "${BRANCH_NAME}",
+  "coverage": {
+    "files": {
+      "allfiles": {
+        "lines": ${LINES},
+        "branches": ${BRANCHES}
+      },
+      "mathUtil.js": {
+        "lines": ${LINES},
+        "branches": ${BRANCHES},
+        "functions": ${FUNCTIONS},
+        "statements": ${STATEMENTS},
+        "uncovered_lines": []
+      }
+    }
+  }
+}
+EOF
+
+          cat temp/hardcoded-payload.json
 
       - name: Send to ServiceNow
         run: |
           echo "📡 Sending PR data to ServiceNow..."
 
-          JS_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil.js"
-          SPEC_FILE="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil.spec.js"
-
-          FINAL_PAYLOAD=$(jq -n \
-            --arg jsfilePath "$JS_FILE" \
-            --arg specJsfilePath "$SPEC_FILE" \
-            --arg prNumber "${{ github.event.pull_request.number }}" \
-            --arg prlink "${{ github.event.pull_request.html_url }}" \
-            --arg Author "${{ github.event.pull_request.user.login }}" \
-            --arg prName "${{ github.event.pull_request.title }}" \
-            --arg BranchName "${{ github.event.pull_request.base.ref }}" \
-            --arg MergeStatus "$([ "${{ github.event.pull_request.draft }}" == "true" ] && echo "Draft" || echo "Ready")" \
-            --argjson coverage "$(cat ./temp/coverage-summary.json)" \
-            '{
-              jsfilePath: $jsfilePath,
-              specJsfilePath: $specJsfilePath,
-              prNumber: $prNumber,
-              prlink: $prlink,
-              Author: $Author,
-              MergeStatus: $MergeStatus,
-              prName: $prName,
-              BranchName: $BranchName,
-              coverage: $coverage
-            }')
-
-          echo "$FINAL_PAYLOAD" > ./temp/temp-pr-payload.json
-
           RESPONSE=$(curl -s -w "\n%{http_code}" --location 'https://hackai.service-now.com/api/snc/nowunitmetricsapi' \
             --header 'Content-Type: application/json' \
-            --data @./temp/temp-pr-payload.json)
+            --data @temp/hardcoded-payload.json)
 
           BODY=$(echo "$RESPONSE" | sed '$d')
           STATUS=$(echo "$RESPONSE" | tail -n1)
@@ -97,9 +109,6 @@ jobs:
       - name: Comment on PR using GitHub API
         env:
           GH_TOKEN: ${{ secrets.GH_COMMENT_PAT }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
         run: |
           COMMENT="✅ **PR Metrics Preview**
 🔗 [Click here to view full metrics](${PR_PREVIEW_LINK})
@@ -112,7 +121,7 @@ jobs:
 | 🔧 Functions | ${FUNCTIONS}% |
 | 📦 Statements | ${STATEMENTS}% |"
 
-          curl -s -X POST "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+          curl -s -X POST "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
             -H "Authorization: token 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" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg body "$COMMENT" '{body: $body}')"
