@@ -41,7 +41,62 @@ jobs:
           SNAPSHOTS=$(echo "$OUTPUT" | grep "^Snapshots:" | sed 's/^Snapshots:[[:space:]]*//')
           TIME=$(echo "$OUTPUT" | grep "^Time:" | sed 's/^Time:[[:space:]]*//')
 
-          echo "🧪 Extracting test results..."
+          echo "📊 Extracting file coverage..."
+          REPO_URL="https://github.com/${{ github.repository }}/blob/main"
+          COVERAGE_LINES=$(echo "$OUTPUT" | awk '/^\s*-{10}/ {found++; next} found==1 {print}' | sed '/^-{10}/q')
+
+          FILE_COVERAGE_JSON="["
+          IS_FIRST_COV=1
+          while read -r line; do
+            FILE=$(echo "$line" | awk '{print $1}')
+            if [[ "$FILE" == "All" || "$FILE" == "" ]]; then
+              continue
+            fi
+
+            STMT=$(echo "$line" | awk '{print $2}')
+            BRANCH=$(echo "$line" | awk '{print $3}')
+            FUNC=$(echo "$line" | awk '{print $4}')
+            LINE_COV=$(echo "$line" | awk '{print $5}')
+            UNCOV=$(echo "$line" | cut -d'|' -f6- | sed 's/^[[:space:]]*//')
+
+            # Construct raw GitHub URLs
+            RAW_SRC_URL="${REPO_URL}/src/${FILE}"
+            SPEC_NAME="$(basename "$FILE" .js).spec.js"
+            RAW_SPEC_URL="${REPO_URL}/__tests__/${SPEC_NAME}"
+
+            ENTRY=$(jq -n \
+              --arg file "$FILE" \
+              --arg src_url "$RAW_SRC_URL" \
+              --arg spec_url "$RAW_SPEC_URL" \
+              --arg stmt "$STMT" \
+              --arg branch "$BRANCH" \
+              --arg func "$FUNC" \
+              --arg line "$LINE_COV" \
+              --arg uncovered "$UNCOV" \
+              '{
+                file: $file,
+                source_url: $src_url,
+                spec_url: $spec_url,
+                coverage: {
+                  statements: $stmt,
+                  branches: $branch,
+                  functions: $func,
+                  lines: $line,
+                  uncovered_lines: $uncovered
+                }
+              }')
+
+            if [[ $IS_FIRST_COV -eq 1 ]]; then
+              IS_FIRST_COV=0
+            else
+              FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON},"
+            fi
+            FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON}${ENTRY}"
+          done <<< "$COVERAGE_LINES"
+
+          FILE_COVERAGE_JSON="${FILE_COVERAGE_JSON}]"
+
+          echo "🧪 Extracting pass/fail and errors..."
           TEST_RESULTS_JSON="["
           IS_FIRST=1
           CURRENT_FILE=""
@@ -58,34 +113,29 @@ jobs:
                 TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
               fi
               TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
-              IN_FAILURE=0
             elif [[ "$line" =~ ^FAIL ]]; then
-              if [[ "$CURRENT_FILE" != "" && "$CURRENT_ERROR" != "" ]]; then
-                # Flush previous error block
-                ENTRY=$(jq -Rs --arg file "$CURRENT_FILE" --arg status "FAIL" \
-                        --arg error "$CURRENT_ERROR" \
-                        '{file: $file, status: $status, error: $error}')
+              FILE=$(echo "$line" | awk '{print $2}')
+              CURRENT_FILE="$FILE"
+              CURRENT_ERROR=""
+              IN_FAILURE=1
+            elif [[ $IN_FAILURE -eq 1 ]]; then
+              if [[ "$line" == "" || "$line" =~ ^PASS || "$line" =~ ^FAIL ]]; then
+                ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
                 if [[ $IS_FIRST -eq 1 ]]; then
                   IS_FIRST=0
                 else
                   TEST_RESULTS_JSON="${TEST_RESULTS_JSON},"
                 fi
                 TEST_RESULTS_JSON="${TEST_RESULTS_JSON}${ENTRY}"
+                IN_FAILURE=0
+              else
+                CURRENT_ERROR="${CURRENT_ERROR}\n${line}"
               fi
-              CURRENT_FILE=$(echo "$line" | awk '{print $2}')
-              CURRENT_ERROR=""
-              IN_FAILURE=1
-            elif [[ $IN_FAILURE -eq 1 ]]; then
-              # Preserve indentation and newline formatting
-              CURRENT_ERROR="${CURRENT_ERROR}${line}\n"
             fi
           done <<< "$OUTPUT"
 
-          # Flush final failure block if any
-          if [[ $IN_FAILURE -eq 1 && "$CURRENT_FILE" != "" && "$CURRENT_ERROR" != "" ]]; then
-            ENTRY=$(jq -Rs --arg file "$CURRENT_FILE" --arg status "FAIL" \
-                    --arg error "$CURRENT_ERROR" \
-                    '{file: $file, status: $status, error: $error}')
+          if [[ $IN_FAILURE -eq 1 ]]; then
+            ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
             if [[ $IS_FIRST -eq 1 ]]; then
               IS_FIRST=0
             else
@@ -103,6 +153,7 @@ jobs:
             --arg snapshots "$SNAPSHOTS" \
             --arg time "$TIME" \
             --argjson test_results "$TEST_RESULTS_JSON" \
+            --argjson file_coverage "$FILE_COVERAGE_JSON" \
             '{
               test_summary: {
                 test_suites: $test_suites,
@@ -110,5 +161,6 @@ jobs:
                 snapshots: $snapshots,
                 time: $time
               },
-              test_results: $test_results
+              test_results: $test_results,
+              file_coverage: $file_coverage
             }'
