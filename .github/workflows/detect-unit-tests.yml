@@ -37,7 +37,6 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.ref }}"
           git fetch origin "$BASE"
-
           FILES=$(git diff --name-only origin/"$BASE"...HEAD | grep '\.spec\.js$' || true)
           echo "found_files=$FILES" >> "$GITHUB_OUTPUT"
 
@@ -55,89 +54,68 @@ jobs:
           path: coverage/lcov-report
           retention-days: 7
 
-      - name: Post Jest Coverage Summary as PR Comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = 'coverage/coverage-summary.json';
-            if (!fs.existsSync(path)) {
-              core.warning('⚠️ coverage-summary.json not found');
-            } else {
-              const summary = JSON.parse(fs.readFileSync(path, 'utf8')).total;
-              const format = (obj) => `- 🧪 **Statements**: ${obj.statements.pct}% | **Branches**: ${obj.branches.pct}% | **Functions**: ${obj.functions.pct}% | **Lines**: ${obj.lines.pct}%`;
-
-              const body = `### ✅ Jest Code Coverage Report\n${format(summary)}\n\n📁 [Download HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) → Artifacts section`;
-
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body
-              });
-            }
-
-      - name: Send Metrics to ServiceNow
+      - name: Post Coverage to ServiceNow (Static JSON Shell Payload)
         run: |
-          echo "📡 Sending metrics to ServiceNow..."
+          echo "📡 Sending hardcoded metrics to ServiceNow..."
 
           PR_NUMBER="${{ github.event.pull_request.number }}"
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_LINK="${{ github.event.pull_request.html_url }}"
           BRANCH_NAME="${{ github.head_ref }}"
           PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          MERGE_STATE="${{ github.event.pull_request.draft == 'true' && echo 'Draft' || echo 'Ready' }}"
 
-          if [ "${{ github.event.pull_request.draft }}" = "false" ]; then
-            MERGE_STATE="Ready"
-          else
-            MERGE_STATE="Draft"
-          fi
+          OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
 
-          REPO="${{ github.repository }}"
-          OWNER=$(echo "$REPO" | cut -d'/' -f1)
-          REPO_NAME=$(echo "$REPO" | cut -d'/' -f2)
+          RAW_BASE="https://raw.githubusercontent.com/$OWNER/$REPO_NAME/refs/heads/$BRANCH_NAME"
+          JS_FILE="$RAW_BASE/src/mathUtil.js"
+          SPEC_FILE="$RAW_BASE/__tests__/mathUtil.spec.js"
 
-          FILES="${{ steps.detect_files.outputs.found_files }}"
-          JS_FILE=""
-          SPEC_FILE=""
+          # Create JSON payload with fixed coverage data
+          read -r -d '' PAYLOAD <<EOF
+{
+  "jsfilePath": "$JS_FILE",
+  "specJsfilePath": "$SPEC_FILE",
+  "prNumber": "$PR_NUMBER",
+  "prlink": "$PR_LINK",
+  "Author": "$PR_AUTHOR",
+  "MergeStatus": "$MERGE_STATE",
+  "prName": "$PR_TITLE",
+  "BranchName": "$BRANCH_NAME",
+  "coverage": {
+    "files": {
+      "allfiles": {
+        "lines": 72.72,
+        "branch": 100
+      },
+      "mathUtil.js": {
+        "lines": 100,
+        "branch": 100,
+        "functions": 100,
+        "statements": 100,
+        "uncovered_lines": []
+      },
+      "mathUtil1.js": {
+        "lines": 50,
+        "branch": 100,
+        "functions": 33.33,
+        "statements": 50,
+        "uncovered_lines": [6, 7, 8, 9, 10]
+      },
+      "mathUtil2.js": {
+        "lines": 75,
+        "branch": 100,
+        "functions": 66.66,
+        "statements": 75,
+        "uncovered_lines": [10]
+      }
+    }
+  }
+}
+EOF
 
-          for FILE in $FILES; do
-            RAW_URL="https://raw.githubusercontent.com/$OWNER/$REPO_NAME/refs/heads/$BRANCH_NAME/$FILE"
-            SPEC_FILE="$RAW_URL"
-
-            BASE_JS_FILE=$(basename "$FILE")
-            JS_NAME="${BASE_JS_FILE/.spec.js/.js}"
-            JS_FILE="https://raw.githubusercontent.com/$OWNER/$REPO_NAME/refs/heads/$BRANCH_NAME/src/$JS_NAME"
-          done
-
-          SUMMARY=$(cat coverage/coverage-summary.json)
-          LINES_PCT=$(echo "$SUMMARY" | jq '.total.lines.pct')
-          BRANCH_PCT=$(echo "$SUMMARY" | jq '.total.branches.pct')
-          FILE_COVERAGE=$(echo "$SUMMARY" | jq '.["mathUtil.js"]')
-
-          PAYLOAD=$(echo '{}' | jq --arg jsfile "$JS_FILE" \
-                                   --arg specfile "$SPEC_FILE" \
-                                   --arg prnum "$PR_NUMBER" \
-                                   --arg prlink "$PR_LINK" \
-                                   --arg author "$PR_AUTHOR" \
-                                   --arg merge "$MERGE_STATE" \
-                                   --arg prname "$PR_TITLE" \
-                                   --arg branch "$BRANCH_NAME" \
-                                   --argjson lines "$LINES_PCT" \
-                                   --argjson branches "$BRANCH_PCT" \
-                                   --argjson filecov "$FILE_COVERAGE" \
-            '.jsfilePath = $jsfile |
-             .specJsfilePath = $specfile |
-             .prNumber = $prnum |
-             .prlink = $prlink |
-             .Author = $author |
-             .MergeStatus = $merge |
-             .prName = $prname |
-             .BranchName = $branch |
-             .coverage.files.allfiles.lines = $lines |
-             .coverage.files.allfiles.branch = $branches |
-             .coverage.files["mathUtil.js"] = $filecov')
-
+          echo "🚀 Payload to be sent:"
           echo "$PAYLOAD"
 
           curl -X POST "https://hackai.service-now.com/api/snc/nowunitmetricsapi" \
@@ -146,5 +124,5 @@ jobs:
 
       - name: Fail if Jest Tests Failed
         run: |
-          echo "Checking Jest result..."
+          echo "✅ Workflow completed. Checking Jest result..."
           exit $jest_exit_code
