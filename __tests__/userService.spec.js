@@ -1,6 +1,5 @@
 // userService.test.js
-const mathUtil = require('../src/userService');
-const { isValidEmail, getUserGreeting, createUser } = require('./userService');
+const { isValidEmail, getUserGreeting, createUser } = require('../src/userService');
 
 describe('isValidEmail', () => {
   test('returns true for a valid email', () => {
