@@ -110,7 +110,7 @@ jobs:
                     lines: "85",
                     branch: "70"
                   },
-                  "mathUtil.js": {
+                  "mathUtil2.js": {
                     lines: "83",
                     branch: "80",
                     functions: "80",
