@@ -36,18 +36,22 @@ jobs:
           mkdir -p temp
           npx jest --coverage | tee ./temp/jest-output.txt
 
-      - name: Parse Jest Coverage Table Summary (Node.js with raw links)
+      - name: Parse Jest Coverage Table Summary (Dynamic Raw URLs)
+        env:
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           node <<'EOF'
           const fs = require('fs');
+          const repo = process.env.REPO;
+          const branch = process.env.REF_NAME;
           const text = fs.readFileSync('./temp/jest-output.txt', 'utf-8');
           const lines = text.split('\n');
 
           const start = lines.findIndex(line => line.includes('File')) + 1;
           const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('-------------'));
 
-          const repo = process.env.GITHUB_REPOSITORY;
-          const rawBase = `https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main`;
+          const rawBase = `https://raw.githubusercontent.com/${repo}/${branch}`;
 
           const data = [];
 
@@ -117,7 +121,6 @@ jobs:
             fi
           done <<< "$OUTPUT"
 
-          # Add last fail block if any
           if [[ $IN_FAILURE -eq 1 ]]; then
             ENTRY=$(jq -n --arg file "$CURRENT_FILE" --arg status "FAIL" --arg error "$CURRENT_ERROR" '{file: $file, status: $status, error: $error}')
             [[ $IS_FIRST -eq 0 ]] && TEST_RESULTS_JSON+=","
@@ -127,7 +130,6 @@ jobs:
           TEST_RESULTS_JSON="${TEST_RESULTS_JSON}]"
           echo "$TEST_RESULTS_JSON" > ./temp/test-results.json
 
-          # Fallback for empty file coverage file
           if [[ ! -s ./temp/coverage-table-summary.json ]]; then
             echo "[]" > ./temp/coverage-table-summary.json
           fi
