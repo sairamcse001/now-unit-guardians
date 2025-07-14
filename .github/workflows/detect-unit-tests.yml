@@ -67,7 +67,7 @@ jobs:
         run: |
           echo "📦 Constructing final payload..."
 
-          JS_PATH="https://github.com/sairamp076/Now-Unit-Guardians/blob/main/src/mathUtil2.js"
+          JS_PATH="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/src/mathUtil2.js"
           SPEC_PATH="https://raw.githubusercontent.com/sairamp076/Now-Unit-Guardians/refs/heads/main/__tests__/mathUtil2.spec.js"
 
           MERGE_STATUS=$(if [[ "$IS_DRAFT" == "true" ]]; then echo "Draft"; else echo "Ready"; fi)
