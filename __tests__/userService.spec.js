@@ -3,47 +3,48 @@
 const { isValidEmail, getUserGreeting, createUser } = require('./userService');
 
 describe('isValidEmail', () => {
-  test('valid email returns true', () => {
+  test('returns true for a valid email', () => {
     expect(isValidEmail('test@example.com')).toBe(true);
   });
 
-  test('invalid email returns false', () => {
-    expect(isValidEmail('invalid-email')).toBe(false);
+  test('returns false for missing "@"', () => {
+    expect(isValidEmail('testexample.com')).toBe(false);
   });
 
-  test('empty email returns false', () => {
+  test('returns false for missing domain', () => {
+    expect(isValidEmail('test@')).toBe(false);
+  });
+
+  test('returns false for missing username', () => {
+    expect(isValidEmail('@example.com')).toBe(false);
+  });
+
+  test('returns false for empty string', () => {
     expect(isValidEmail('')).toBe(false);
   });
 });
 
 describe('getUserGreeting', () => {
-  test('returns greeting for valid user', () => {
-    expect(getUserGreeting({ name: 'Geeta' })).toBe('Hello, Geeta!');
+  test('returns correct greeting for valid user', () => {
+    expect(getUserGreeting({ name: 'Sai' })).toBe('Hello, Sai!');
   });
 
   test('throws error if user is null', () => {
     expect(() => getUserGreeting(null)).toThrow('Invalid user');
   });
 
-  test('should work', () => {
-    // Bad test – meaningless
-    expect(true).toBe(true);
+  test('throws error if user has no name', () => {
+    expect(() => getUserGreeting({})).toThrow('Invalid user');
   });
 });
 
 describe('createUser', () => {
-  test('creates user with valid inputs', () => {
-    const user = createUser('sai@example.com', 'Sai Ram');
-    expect(user.name).toBe('Sai Ram');
+  test('creates user with valid email and name', () => {
+    const user = createUser('test@example.com', 'Sai');
+    expect(user).toEqual({ email: 'test@example.com', name: 'Sai' });
   });
 
   test('throws error for invalid email', () => {
-    expect(() => createUser('bademail', 'Geeta')).toThrow('Invalid email format');
-  });
-
-  test('createUser result defined', () => {
-    // Weak assertion
-    const result = createUser('valid@example.com', 'Geeta');
-    expect(result).toBeDefined();
+    expect(() => createUser('invalid-email', 'Sai')).toThrow('Invalid email format');
   });
 });
