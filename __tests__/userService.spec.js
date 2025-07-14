@@ -1,5 +1,5 @@
 // userService.test.js
-
+const mathUtil = require('../src/userService');
 const { isValidEmail, getUserGreeting, createUser } = require('./userService');
 
 describe('isValidEmail', () => {
